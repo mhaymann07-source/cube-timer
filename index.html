@@ -1,0 +1,802 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cube Timer</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --line: #262b35; --text: #e8eaf0; --muted: #8a92a3;
+    --accent: #4f8cff; --hold: #ff5a5f; --ready: #2ecc71; --warn: #f5a623;
+  }
+  :root { color-scheme: dark; }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) { --bg: #f4f5f8; --panel: #ffffff; --line: #e1e4ea; --text: #1b1e25; --muted: #6b7280; color-scheme: light; }
+  }
+  :root[data-theme="light"] { --bg: #f4f5f8; --panel: #ffffff; --line: #e1e4ea; --text: #1b1e25; --muted: #6b7280; color-scheme: light; }
+  button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button.confirm { background: var(--hold); border-color: var(--hold); color: #fff; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex; flex-direction: column; min-height: 100%;
+    -webkit-user-select: none; user-select: none;
+  }
+  header {
+    display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between;
+    padding-block: 12px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); border-bottom: 1px solid var(--line); background: var(--panel);
+  }
+  header h1 { font-size: 17px; margin: 0; letter-spacing: .3px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  select, button {
+    font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line);
+    border-radius: 8px; padding: 6px 10px; cursor: pointer;
+  }
+  button:hover, select:hover { border-color: var(--accent); }
+  label.toggle { display: flex; gap: 6px; align-items: center; cursor: pointer; color: var(--muted); }
+
+  #scrambleBar { padding-block: 18px 0; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); text-align: center; }
+  #scramble {
+    font: 600 clamp(16px, 2.4vw, 24px)/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    word-spacing: 4px; max-width: 980px; margin: 0 auto;
+  }
+  #scrambleBar .row { margin-top: 8px; display: flex; gap: 8px; justify-content: center; }
+  #scrambleBar button { font-size: 13px; padding: 4px 10px; }
+
+  #stage {
+    flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding-block: 24px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); min-height: 260px; cursor: pointer; touch-action: none;
+  }
+  #time {
+    font: 700 clamp(64px, 16vw, 168px)/1 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-variant-numeric: tabular-nums; transition: color .08s;
+  }
+  #time.hold { color: var(--hold); }
+  #time.ready { color: var(--ready); }
+  #time.inspect { color: var(--warn); }
+  #hint { color: var(--muted); margin-top: 14px; font-size: 14px; text-align: center; }
+  #lastActions { margin-top: 14px; display: flex; gap: 8px; visibility: hidden; }
+  #lastActions.show { visibility: visible; }
+  #lastActions button { font-size: 13px; padding: 4px 12px; }
+  #lastActions button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+  #bottom {
+    display: grid; grid-template-columns: 1fr 1.4fr 1fr; gap: 12px; padding-block: 0 16px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; min-width: 0; }
+  .card h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin: 0 0 10px; display:flex; justify-content:space-between; align-items:center; }
+  .card h2 button { font-size: 11px; padding: 2px 8px; text-transform: none; letter-spacing: 0; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  td, th { padding: 4px 6px; text-align: right; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  td:first-child, th:first-child { text-align: left; }
+  #stats td:first-child { color: var(--muted); }
+  #listWrap { max-height: 240px; overflow-y: auto; }
+  #list tr:hover { background: var(--bg); }
+  #list td.act { white-space: nowrap; }
+  #list td.act button { font-size: 11px; padding: 1px 6px; margin-left: 2px; }
+  #list td.act button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .empty { color: var(--muted); text-align: center; padding: 20px 0; }
+
+  #net { display: grid; grid-template-columns: repeat(4, auto); gap: 4px; justify-content: center; }
+  .face { display: grid; gap: 2px; }
+  .face div { width: 16px; height: 16px; border-radius: 3px; border: 1px solid rgba(0,0,0,.35); }
+  .face.n2 div { width: 25px; height: 25px; }
+  #netNote { color: var(--muted); text-align: center; font-size: 13px; padding: 30px 0; }
+
+  body.solving header, body.solving #scrambleBar, body.solving #bottom, body.solving #hint, body.solving #lastActions { opacity: 0; pointer-events: none; }
+  header, #scrambleBar, #bottom, #hint { transition: opacity .15s; }
+
+  @media (max-width: 860px) {
+    #bottom { grid-template-columns: 1fr; }
+  }
+  /* ---------- scenery background ---------- */
+  :root { --glass: rgba(14, 18, 34, .58); --halo: rgba(6, 10, 30, .6); --scene: night; --shade: rgba(4, 8, 20, .38); }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) { --glass: rgba(255, 255, 255, .62); --halo: rgba(255, 255, 255, .85); --scene: day; --shade: rgba(255, 255, 255, .12); }
+  }
+  :root[data-theme="light"] { --glass: rgba(255, 255, 255, .62); --halo: rgba(255, 255, 255, .85); --scene: day; --shade: rgba(255, 255, 255, .12); }
+  #scenery { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 0; pointer-events: none; display: block; }
+  body > *:not(.bg-layer):not(script) { position: relative; z-index: 1; }
+  #sceneVideo, #sceneShade { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 0; pointer-events: none; object-fit: cover; }
+  #sceneShade { background: var(--shade); }
+  body:not(.canvas-scene) #scenery, body:not(.video-scene) #sceneVideo, body:not(.video-scene) #sceneShade { display: none; }
+  #credit { text-align: right; font-size: 12px; color: var(--muted); padding-block: 0 12px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+  #credit span { display: inline-block; background: var(--glass); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); border-radius: 8px; padding: 3px 10px; }
+  #credit a { color: inherit; }
+  body.no-scenery #credit { display: none; }
+  header, .card { background: var(--glass); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); }
+  #scramble, #hint {
+    display: inline-block; background: var(--glass); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+    border-radius: 12px; padding: 6px 16px;
+  }
+  #time { text-shadow: 0 2px 24px var(--halo), 0 0 4px var(--halo); }
+</style>
+</head>
+<body>
+<canvas id="scenery" class="bg-layer" aria-hidden="true"></canvas>
+<video id="sceneVideo" class="bg-layer" muted loop playsinline preload="auto" aria-hidden="true"></video>
+<div id="sceneShade" class="bg-layer" aria-hidden="true"></div>
+<header>
+  <h1>🧊 Cube Timer</h1>
+  <div class="controls">
+    <select id="puzzle" title="Puzzle">
+      <option value="222">2x2</option>
+      <option value="333" selected>3x3</option>
+      <option value="444">4x4</option>
+    </select>
+    <label class="toggle"><input type="checkbox" id="inspection"> 15s inspection</label>
+    <label class="toggle">Scene <select id="sceneSel" title="Background scene"></select></label>
+  </div>
+</header>
+
+<div id="scrambleBar">
+  <div id="scramble"></div>
+  <div class="row">
+    <button id="newScramble">New scramble</button>
+    <button id="copyScramble">Copy</button>
+  </div>
+</div>
+
+<div id="stage">
+  <div id="time">0.00</div>
+  <div id="lastActions">
+    <button data-pen="ok">OK</button>
+    <button data-pen="+2">+2</button>
+    <button data-pen="dnf">DNF</button>
+    <button data-pen="del">Delete</button>
+  </div>
+  <div id="hint">Hold <b>Space</b> (or touch &amp; hold) until green, release to start. Any key stops.</div>
+</div>
+
+<div id="bottom">
+  <div class="card">
+    <h2>Statistics</h2>
+    <table id="stats"></table>
+  </div>
+  <div class="card">
+    <h2>Solves <span><button id="exportBtn">Copy CSV</button> <button id="clearBtn">Clear session</button></span></h2>
+    <div id="listWrap"><table id="list"></table></div>
+  </div>
+  <div class="card">
+    <h2>Scramble preview</h2>
+    <div id="net"></div>
+    <div id="netNote" hidden>Preview available for 2x2 and 3x3.</div>
+  </div>
+</div>
+
+<footer id="credit"></footer>
+
+<script>
+(() => {
+  // ---------- storage ----------
+  const KEY = 'cube-timer-v1';
+  let data = { puzzle: '333', inspection: false, solves: { '222': [], '333': [], '444': [] } };
+  try {
+    const raw = localStorage.getItem(KEY);
+    if (raw) { const d = JSON.parse(raw); data = Object.assign(data, d); data.solves = Object.assign({ '222': [], '333': [], '444': [] }, d.solves); }
+  } catch (e) {}
+  const save = () => { try { localStorage.setItem(KEY, JSON.stringify(data)); } catch (e) {} };
+
+  // ---------- cube model (3D stickers) ----------
+  const N = { U: [0,1,0], D: [0,-1,0], R: [1,0,0], L: [-1,0,0], F: [0,0,1], B: [0,0,-1] };
+  // net orientation per face: [right, down]
+  const NET = {
+    U: [[1,0,0],[0,0,1]], F: [[1,0,0],[0,-1,0]], R: [[0,0,-1],[0,-1,0]],
+    B: [[-1,0,0],[0,-1,0]], L: [[0,0,1],[0,-1,0]], D: [[1,0,0],[0,0,-1]]
+  };
+  const COLOR = { U: '#ffffff', D: '#ffd500', F: '#00b14f', B: '#0051ba', R: '#e8112d', L: '#ff7a00' };
+  const dot = (a, b) => a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+  const cross = (a, v) => [a[1]*v[2]-a[2]*v[1], a[2]*v[0]-a[0]*v[2], a[0]*v[1]-a[1]*v[0]];
+  const add = (...vs) => vs.reduce((s, v) => [s[0]+v[0], s[1]+v[1], s[2]+v[2]], [0,0,0]);
+  const mul = (v, k) => [v[0]*k, v[1]*k, v[2]*k];
+  const gridPos = (f, i, j) => add(N[f], mul(NET[f][0], j-1), mul(NET[f][1], i-1));
+
+  function solvedCube() {
+    const s = [];
+    for (const f in N) for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++)
+      s.push({ p: gridPos(f, i, j), n: N[f].slice(), c: f });
+    return s;
+  }
+  // clockwise quarter turn as seen from the face: v' = (v·a)a - a×v
+  const rot = (v, a) => { const d = dot(v, a), c = cross(a, v); return [d*a[0]-c[0], d*a[1]-c[1], d*a[2]-c[2]]; };
+  function turn(cube, face, times) {
+    const a = N[face];
+    for (const s of cube) if (dot(s.p, a) === 1)
+      for (let t = 0; t < times; t++) { s.p = rot(s.p, a); s.n = rot(s.n, a); }
+  }
+  function applyAlg(cube, alg) {
+    for (const m of alg.trim().split(/\s+/).filter(Boolean)) {
+      const f = m[0], times = m.endsWith('2') ? 2 : m.endsWith("'") ? 3 : 1;
+      if (N[f]) turn(cube, f, times);
+    }
+    return cube;
+  }
+  function faceColors(cube) {
+    const map = new Map(cube.map(s => [s.p + '|' + s.n, s.c]));
+    const out = {};
+    for (const f in N) {
+      out[f] = [];
+      for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) out[f].push(map.get(gridPos(f, i, j) + '|' + N[f]));
+    }
+    return out;
+  }
+
+  // ---------- scrambles ----------
+  const AXIS = { U: 'y', D: 'y', R: 'x', L: 'x', F: 'z', B: 'z', Uw: 'y', Rw: 'x', Fw: 'z' };
+  const SUF = ['', "'", '2'];
+  function genScramble(puzzle) {
+    const cfg = {
+      '222': { faces: ['R','U','F'], len: 9 + Math.floor(Math.random() * 3) },
+      '333': { faces: ['U','D','R','L','F','B'], len: 20 + Math.floor(Math.random() * 2) },
+      '444': { faces: ['U','D','R','L','F','B','Uw','Rw','Fw'], len: 40 },
+    }[puzzle];
+    const moves = [];
+    while (moves.length < cfg.len) {
+      const f = cfg.faces[Math.floor(Math.random() * cfg.faces.length)];
+      const last = moves[moves.length - 1], prev = moves[moves.length - 2];
+      if (last && last.f === f) continue;
+      if (last && prev && AXIS[last.f] === AXIS[f] && AXIS[prev.f] === AXIS[f]) continue;
+      moves.push({ f, s: SUF[Math.floor(Math.random() * 3)] });
+    }
+    return moves.map(m => m.f + m.s).join(' ');
+  }
+
+  // ---------- formatting & stats ----------
+  const val = s => s.pen === 'dnf' ? Infinity : s.t + (s.pen === '+2' ? 2000 : 0);
+  function fmt(ms) {
+    if (ms == null) return '-';
+    if (ms === Infinity) return 'DNF';
+    const cs = Math.floor(ms / 10), m = Math.floor(cs / 6000), sec = Math.floor(cs / 100) % 60, c = cs % 100;
+    const pad = n => String(n).padStart(2, '0');
+    return m ? `${m}:${pad(sec)}.${pad(c)}` : `${sec}.${pad(c)}`;
+  }
+  const fmtSolve = s => s.pen === 'dnf' ? `DNF(${fmt(s.t)})` : fmt(val(s)) + (s.pen === '+2' ? '+' : '');
+  function avgOf(vals) {
+    const n = vals.length;
+    const k = Math.ceil(n * 0.05);
+    const mid = vals.slice().sort((a, b) => a - b).slice(k, n - k);
+    if (mid.includes(Infinity)) return Infinity;
+    return mid.reduce((a, b) => a + b, 0) / mid.length;
+  }
+  // average of n ending at index i (inclusive)
+  function aoAt(solves, i, n) { return i + 1 < n ? null : avgOf(solves.slice(i + 1 - n, i + 1).map(val)); }
+  function bestAo(solves, n) {
+    let best = null;
+    for (let i = n - 1; i < solves.length; i++) { const a = aoAt(solves, i, n); if (best == null || a < best) best = a; }
+    return best;
+  }
+
+  // ---------- DOM ----------
+  const $ = id => document.getElementById(id);
+  const timeEl = $('time'), stage = $('stage'), scrambleEl = $('scramble'), lastActions = $('lastActions');
+  let scramble = '';
+  const solves = () => data.solves[data.puzzle];
+  // second click within 3s confirms (browser confirm() dialogs are blocked in some viewers)
+  function confirmClick(btn, label, fn) {
+    if (btn.classList.contains('confirm')) { clearTimeout(btn._t); btn.classList.remove('confirm'); btn.textContent = btn._orig; fn(); return; }
+    btn._orig = btn.textContent; btn.textContent = label; btn.classList.add('confirm');
+    btn._t = setTimeout(() => { btn.classList.remove('confirm'); btn.textContent = btn._orig; }, 3000);
+  }
+
+  function newScramble() {
+    scramble = genScramble(data.puzzle);
+    scrambleEl.textContent = scramble;
+    renderNet();
+  }
+
+  function renderNet() {
+    const net = $('net'), note = $('netNote');
+    net.innerHTML = '';
+    if (data.puzzle === '444') { net.hidden = true; note.hidden = false; return; }
+    net.hidden = false; note.hidden = true;
+    const colors = faceColors(applyAlg(solvedCube(), scramble));
+    const two = data.puzzle === '222';
+    const place = { U: [1,2], L: [2,1], F: [2,2], R: [2,3], B: [2,4], D: [3,2] };
+    for (const f of ['U','L','F','R','B','D']) {
+      const el = document.createElement('div');
+      el.className = 'face' + (two ? ' n2' : '');
+      el.style.gridRow = place[f][0]; el.style.gridColumn = place[f][1];
+      el.style.gridTemplateColumns = `repeat(${two ? 2 : 3}, auto)`;
+      const idx = two ? [0, 2, 6, 8] : [0,1,2,3,4,5,6,7,8];
+      for (const k of idx) { const d = document.createElement('div'); d.style.background = COLOR[colors[f][k]]; el.appendChild(d); }
+      net.appendChild(el);
+    }
+  }
+
+  function renderStats() {
+    const s = solves(), vals = s.map(val), ok = vals.filter(v => v !== Infinity);
+    const cur = n => s.length >= n ? aoAt(s, s.length - 1, n) : null;
+    const rows = [
+      ['Solves', `${ok.length} / ${s.length}`, ''],
+      ['Best', fmt(ok.length ? Math.min(...ok) : null), ''],
+      ['Mean', fmt(ok.length ? ok.reduce((a, b) => a + b, 0) / ok.length : null), ''],
+      ['ao5', fmt(cur(5)), fmt(bestAo(s, 5))],
+      ['ao12', fmt(cur(12)), fmt(bestAo(s, 12))],
+      ['ao50', fmt(cur(50)), fmt(bestAo(s, 50))],
+      ['ao100', fmt(cur(100)), fmt(bestAo(s, 100))],
+    ];
+    $('stats').innerHTML = '<tr><th></th><th>Current</th><th>Best</th></tr>' +
+      rows.map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td></tr>`).join('');
+  }
+
+  function renderList() {
+    const s = solves(), list = $('list');
+    if (!s.length) { list.innerHTML = '<tr><td class="empty" colspan="5">No solves yet — go!</td></tr>'; return; }
+    let html = '<tr><th>#</th><th>Time</th><th>ao5</th><th>ao12</th><th></th></tr>';
+    for (let i = s.length - 1; i >= 0; i--) {
+      const x = s[i];
+      html += `<tr title="${x.scr}"><td>${i + 1}</td><td>${fmtSolve(x)}</td><td>${fmt(aoAt(s, i, 5))}</td><td>${fmt(aoAt(s, i, 12))}</td>
+        <td class="act"><button data-i="${i}" data-pen="+2" class="${x.pen === '+2' ? 'on' : ''}">+2</button><button data-i="${i}" data-pen="dnf" class="${x.pen === 'dnf' ? 'on' : ''}">DNF</button><button data-i="${i}" data-pen="del">✕</button></td></tr>`;
+    }
+    list.innerHTML = html;
+  }
+
+  function renderLastActions() {
+    const s = solves(), last = s[s.length - 1];
+    lastActions.classList.toggle('show', !!last && state === 'idle' && justSolved);
+    if (!last) return;
+    for (const b of lastActions.querySelectorAll('button'))
+      b.classList.toggle('on', b.dataset.pen === (last.pen || 'ok'));
+  }
+
+  function renderAll() { renderStats(); renderList(); renderLastActions(); }
+
+  function setPenalty(i, pen) {
+    const s = solves();
+    if (!s[i]) return;
+    if (pen === 'del') {
+      s.splice(i, 1);
+      if (i === s.length) { justSolved = false; timeEl.textContent = '0.00'; }
+    } else {
+      s[i].pen = (pen === 'ok' || s[i].pen === pen) ? '' : pen;
+      if (i === s.length - 1 && justSolved) timeEl.textContent = fmtSolve(s[i]);
+    }
+    save(); renderAll();
+  }
+
+  // ---------- timer state machine ----------
+  const HOLD_MS = 300;
+  let state = 'idle';   // idle | inspect | running
+  let holding = false, ready = false, holdTimer = null, ignoreRelease = false;
+  let startT = 0, inspStart = 0, inspPenalty = '', raf = 0, justSolved = false;
+
+  function setTimeClass(c) { timeEl.className = c || ''; }
+
+  function press() {
+    if (state === 'running') { stopSolve(); ignoreRelease = true; return; }
+    if (holding) return;
+    holding = true; ready = false;
+    if (state === 'idle' && data.inspection) return; // inspection starts on release
+    setTimeClass('hold');
+    holdTimer = setTimeout(() => { ready = true; setTimeClass('ready'); if (state === 'idle') timeEl.textContent = '0.00'; }, HOLD_MS);
+  }
+
+  function release() {
+    if (ignoreRelease) { ignoreRelease = false; holding = false; return; }
+    if (!holding) return;
+    holding = false; clearTimeout(holdTimer);
+    if (state === 'idle' && data.inspection) { startInspection(); return; }
+    if (ready) { ready = false; startSolve(); return; }
+    setTimeClass(state === 'inspect' ? 'inspect' : '');
+  }
+
+  function startInspection() {
+    state = 'inspect'; inspStart = performance.now(); justSolved = false;
+    document.body.classList.add('solving'); renderLastActions();
+    setTimeClass('inspect');
+    const tick = () => {
+      if (state !== 'inspect') return;
+      const e = (performance.now() - inspStart) / 1000;
+      if (!holding) timeEl.textContent = e < 15 ? String(15 - Math.floor(e)) : e < 17 ? '+2' : 'DNF';
+      raf = requestAnimationFrame(tick);
+    };
+    tick();
+  }
+
+  function startSolve() {
+    inspPenalty = '';
+    if (state === 'inspect') {
+      const e = performance.now() - inspStart;
+      inspPenalty = e > 17000 ? 'dnf' : e > 15000 ? '+2' : '';
+    }
+    cancelAnimationFrame(raf);
+    state = 'running'; justSolved = false; startT = performance.now();
+    document.body.classList.add('solving'); renderLastActions();
+    setTimeClass('');
+    const tick = () => {
+      if (state !== 'running') return;
+      timeEl.textContent = fmt(performance.now() - startT);
+      raf = requestAnimationFrame(tick);
+    };
+    tick();
+  }
+
+  function stopSolve() {
+    const t = Math.round(performance.now() - startT);
+    cancelAnimationFrame(raf);
+    state = 'idle'; justSolved = true;
+    document.body.classList.remove('solving');
+    const solve = { t, pen: inspPenalty, scr: scramble, at: Date.now() };
+    solves().push(solve); save();
+    timeEl.textContent = fmtSolve(solve);
+    setTimeClass('');
+    newScramble(); renderAll();
+  }
+
+  function cancelAll() {
+    cancelAnimationFrame(raf); clearTimeout(holdTimer);
+    state = 'idle'; holding = false; ready = false;
+    document.body.classList.remove('solving');
+    setTimeClass(''); timeEl.textContent = '0.00';
+  }
+
+  // keyboard
+  document.addEventListener('keydown', e => {
+    if (e.target.tagName === 'SELECT' || (e.target.tagName === 'INPUT' && e.code === 'Space' && state === 'idle' && !holding)) {
+      if (e.code !== 'Space') return;
+      e.target.blur();
+    }
+    if (state === 'running') {
+      if (['Shift','Control','Alt','Meta'].includes(e.key)) return;
+      e.preventDefault(); if (!e.repeat) press(); return;
+    }
+    if (e.code === 'Escape') { if (state === 'inspect' || holding) cancelAll(); return; }
+    if (e.code !== 'Space') return;
+    e.preventDefault();
+    if (e.target.tagName === 'BUTTON') e.target.blur();
+    if (!e.repeat) press();
+  });
+  document.addEventListener('keyup', e => {
+    if (e.code === 'Space' || ignoreRelease) { e.preventDefault(); release(); }
+  });
+
+  // touch / mouse on the stage
+  stage.addEventListener('pointerdown', e => {
+    if (e.target.closest('button')) return;
+    e.preventDefault(); press();
+  });
+  stage.addEventListener('pointerup', e => { if (!e.target.closest('button')) release(); });
+  stage.addEventListener('pointercancel', () => { if (holding) { holding = false; clearTimeout(holdTimer); setTimeClass(state === 'inspect' ? 'inspect' : ''); } });
+  // while solving the overlay hides everything; let a tap anywhere stop it
+  document.addEventListener('pointerdown', e => {
+    if (state === 'running' && !stage.contains(e.target)) { press(); }
+  });
+  document.addEventListener('pointerup', e => { if (ignoreRelease && !stage.contains(e.target)) release(); });
+
+  // UI controls
+  lastActions.addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    b.blur();
+    if (b.dataset.pen === 'del') return confirmClick(b, 'Sure?', () => setPenalty(solves().length - 1, 'del'));
+    setPenalty(solves().length - 1, b.dataset.pen);
+  });
+  $('list').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    b.blur();
+    if (b.dataset.pen === 'del') return confirmClick(b, 'Sure?', () => setPenalty(+b.dataset.i, 'del'));
+    setPenalty(+b.dataset.i, b.dataset.pen);
+  });
+  $('newScramble').addEventListener('click', e => { newScramble(); e.target.blur(); });
+  $('copyScramble').addEventListener('click', e => {
+    e.target.blur();
+    const b = e.target, done = msg => { b.textContent = msg; setTimeout(() => b.textContent = 'Copy', 1200); };
+    try { navigator.clipboard.writeText(scramble).then(() => done('Copied!'), () => done('Copy blocked')); } catch (err) { done('Copy blocked'); }
+  });
+  $('puzzle').addEventListener('change', e => {
+    data.puzzle = e.target.value; save(); e.target.blur();
+    justSolved = false; timeEl.textContent = '0.00';
+    newScramble(); renderAll();
+  });
+  $('inspection').addEventListener('change', e => { data.inspection = e.target.checked; save(); e.target.blur(); });
+  $('clearBtn').addEventListener('click', e => {
+    e.target.blur();
+    if (!solves().length) return;
+    confirmClick(e.target, `Delete all ${solves().length}?`, () => {
+      data.solves[data.puzzle] = []; save(); justSolved = false; timeEl.textContent = '0.00'; renderAll();
+    });
+  });
+  $('exportBtn').addEventListener('click', e => {
+    e.target.blur();
+    const rows = [['#','time','penalty','result','scramble','date']].concat(
+      solves().map((s, i) => [i + 1, (s.t / 1000).toFixed(2), s.pen || '', fmtSolve(s), s.scr, new Date(s.at).toISOString()]));
+    const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const b = e.target, done = msg => { b.textContent = msg; setTimeout(() => b.textContent = 'Copy CSV', 1500); };
+    try { navigator.clipboard.writeText(csv).then(() => done('Copied!'), () => done('Copy blocked')); } catch (err) { done('Copy blocked'); }
+  });
+
+  // init
+  $('puzzle').value = data.puzzle;
+  $('inspection').checked = !!data.inspection;
+  newScramble(); renderAll();
+
+  // exposed for testing
+  window.__cube = { solvedCube, applyAlg, faceColors, genScramble, avgOf };
+})();
+</script>
+<script>
+(() => {
+  // Procedural, looping anime-style landscape. Day in light theme, dusk with fireflies in dark theme.
+  const cv = document.getElementById('scenery'), ctx = cv.getContext('2d');
+  const sel = document.getElementById('sceneSel'), vid = document.getElementById('sceneVideo'), credit = document.getElementById('credit');
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)');
+  const SCENES = [{ id: 'sakura', name: 'Sakura Hills (animated)', type: 'canvas' }].concat(/*VIDEO_SCENES*/[]).concat([{ id: 'off', name: 'Off', type: 'off' }]);
+  let scene = 'sakura';
+  try {
+    const saved = localStorage.getItem('cube-timer-scene');
+    if (saved) scene = saved; else if (localStorage.getItem('cube-timer-scenery') === 'off') scene = 'off';
+  } catch (e) {}
+  if (!SCENES.some(s => s.id === scene)) scene = 'sakura';
+  for (const s of SCENES) { const o = document.createElement('option'); o.value = s.id; o.textContent = s.name; sel.appendChild(o); }
+  const esc = x => String(x).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+  let W = 0, H = 0, dpr = 1, mode = 'day', sky, back, front, clouds = [], blades = [], petals = [], flies = [], stars = [];
+  let raf = 0, last = 0, t = 0;
+
+  const rng = seed => () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let x = Math.imul(seed ^ seed >>> 15, 1 | seed); x = x + Math.imul(x ^ x >>> 7, 61 | x) ^ x; return ((x ^ x >>> 14) >>> 0) / 4294967296; };
+  const R = rng(7);
+  const rand = (a, b) => a + Math.random() * (b - a);
+
+  const PAL = {
+    day: {
+      sky: ['#5aa6e6', '#9fd0f2', '#ffe7c4'], sun: '#fff6dc', glow: 'rgba(255,236,190,', mtnFar: '#a9c3e3', mtnNear: '#86a7d4',
+      water: ['#bfe0f5', '#7fb3dd'], hillBack: '#8fcb6e', hillFront: '#64ab4c', hillShade: '#4f9440',
+      grass: ['#5fa845', '#74bb55', '#4c9139', '#86c862'], cloud: ['#ffffff', '#dfe9f8'], trunk: '#6b4a3a',
+      bloom: ['#f9c2d2', '#f5a3bb', '#fde0e8', '#f08fac'], petal: ['#f8b7ca', '#fcd5e0', '#f39bb6'], flower: ['#ffffff', '#ffe27a', '#ffd1e0']
+    },
+    night: {
+      sky: ['#0d1638', '#2b3270', '#d98a86'], sun: '#f4f1e2', glow: 'rgba(220,225,255,', mtnFar: '#3a3f7a', mtnNear: '#272c5e',
+      water: ['#3c3f78', '#161c44'], hillBack: '#1f3d3c', hillFront: '#16302e', hillShade: '#10241f',
+      grass: ['#1e4a3c', '#285a47', '#173b31', '#2f6650'], cloud: ['#5a5d98', '#33386e'], trunk: '#2a1c22',
+      bloom: ['#b9789a', '#9b5f84', '#d495b0', '#8a4f74'], petal: ['#c98aa8', '#e2aec4', '#a96d90'], flower: ['#d9d6ff', '#fff2a8', '#e6b3cc']
+    }
+  };
+
+  // terrain shapes (fractions of the screen)
+  const horizon = () => H * 0.6;
+  const backHillY = x => H * 0.8 - Math.sin(x / W * Math.PI * 1.3 + 0.6) * H * 0.045;
+  const frontHillY = x => H * 0.88 - Math.exp(-((((x / W) - 0.13) / 0.2) ** 2)) * H * 0.16 - Math.sin(x / W * 7) * H * 0.008;
+  const treeX = () => W * 0.13, treeBase = () => frontHillY(treeX());
+
+  function canvas(w, h) { const c = document.createElement('canvas'); c.width = Math.ceil(w * dpr); c.height = Math.ceil(h * dpr); const g = c.getContext('2d'); g.scale(dpr, dpr); return [c, g]; }
+
+  function ridge(g, base, amp, color, seed, rough) {
+    const r = rng(seed), ph = [r() * 6, r() * 6, r() * 6, r() * 6];
+    g.fillStyle = color; g.beginPath(); g.moveTo(0, H);
+    for (let x = 0; x <= W + 4; x += 4) {
+      const u = x / W;
+      const h = 0.55 + 0.25 * Math.sin(u * 3.1 + ph[0]) + 0.13 * Math.sin(u * 7.3 + ph[1]) + rough * (0.06 * Math.sin(u * 19 + ph[2]) + 0.03 * Math.sin(u * 41 + ph[3]));
+      g.lineTo(x, base - Math.max(0.05, h) * amp);
+    }
+    g.lineTo(W, H); g.closePath(); g.fill();
+  }
+
+  function buildSky(P) {
+    const [c, g] = canvas(W, H), hz = horizon();
+    const gr = g.createLinearGradient(0, 0, 0, hz);
+    gr.addColorStop(0, P.sky[0]); gr.addColorStop(0.55, P.sky[1]); gr.addColorStop(1, P.sky[2]);
+    g.fillStyle = gr; g.fillRect(0, 0, W, hz + 2);
+    const s = sunPos(), rad = Math.min(W, H) * (mode === 'day' ? 0.055 : 0.045);
+    const glow = g.createRadialGradient(s.x, s.y, rad * 0.5, s.x, s.y, rad * 6);
+    glow.addColorStop(0, P.glow + '0.55)'); glow.addColorStop(1, P.glow + '0)');
+    g.fillStyle = glow; g.fillRect(0, 0, W, hz);
+    g.fillStyle = P.sun; g.beginPath(); g.arc(s.x, s.y, rad, 0, 7); g.fill();
+    if (mode === 'night') { // crescent shading
+      g.fillStyle = 'rgba(43,50,112,.85)'; g.beginPath(); g.arc(s.x + rad * 0.45, s.y - rad * 0.2, rad * 0.9, 0, 7); g.fill();
+    }
+    return c;
+  }
+  const sunPos = () => mode === 'day' ? { x: W * 0.7, y: horizon() - H * 0.13 } : { x: W * 0.8, y: H * 0.16 };
+
+  function buildBack(P) {
+    const [c, g] = canvas(W, H), hz = horizon();
+    ridge(g, hz + 2, H * 0.24, P.mtnFar, 11, 1);
+    // snowy caps on far range (day) / moonlit rims (night)
+    ridge(g, hz + 2, H * 0.15, P.mtnNear, 23, 0.6);
+    const wg = g.createLinearGradient(0, hz, 0, H);
+    wg.addColorStop(0, P.water[0]); wg.addColorStop(1, P.water[1]);
+    g.fillStyle = wg; g.fillRect(0, hz, W, H - hz);
+    // soft haze on the horizon line
+    const hg = g.createLinearGradient(0, hz - H * 0.05, 0, hz + H * 0.02);
+    hg.addColorStop(0, 'rgba(255,255,255,0)'); hg.addColorStop(1, mode === 'day' ? 'rgba(255,255,255,.35)' : 'rgba(217,138,134,.25)');
+    g.fillStyle = hg; g.fillRect(0, hz - H * 0.05, W, H * 0.07);
+    return c;
+  }
+
+  function buildFront(P) {
+    const [c, g] = canvas(W, H), r = rng(5);
+    g.fillStyle = P.hillBack; g.beginPath(); g.moveTo(0, H);
+    for (let x = 0; x <= W + 4; x += 4) g.lineTo(x, backHillY(x));
+    g.lineTo(W, H); g.fill();
+    g.fillStyle = P.hillFront; g.beginPath(); g.moveTo(0, H);
+    for (let x = 0; x <= W + 4; x += 4) g.lineTo(x, frontHillY(x));
+    g.lineTo(W, H); g.fill();
+    // anime two-tone shadow band
+    g.fillStyle = P.hillShade; g.beginPath(); g.moveTo(0, H);
+    for (let x = 0; x <= W + 4; x += 4) g.lineTo(x, frontHillY(x) + H * 0.05 + Math.sin(x / 60) * 3);
+    g.lineTo(W, H); g.fill();
+    // little flowers
+    for (let i = 0; i < Math.round(W / 14); i++) {
+      const x = r() * W, onFront = r() < 0.6, y = (onFront ? frontHillY(x) : backHillY(x)) + 4 + r() * H * 0.08;
+      g.fillStyle = P.flower[Math.floor(r() * P.flower.length)]; g.globalAlpha = 0.85;
+      g.beginPath(); g.arc(x, y, 1.2 + r() * 1.4, 0, 7); g.fill();
+    }
+    g.globalAlpha = 1;
+    drawTree(g, P);
+    return c;
+  }
+
+  function drawTree(g, P) {
+    const x = treeX(), y = treeBase(), s = Math.min(W, H) / 700, r = rng(42);
+    g.strokeStyle = P.trunk; g.lineCap = 'round';
+    const branch = (x0, y0, ang, len, w, depth) => {
+      const x1 = x0 + Math.cos(ang) * len, y1 = y0 + Math.sin(ang) * len;
+      g.lineWidth = w; g.beginPath(); g.moveTo(x0, y0); g.quadraticCurveTo((x0 + x1) / 2 + (r() - .5) * len * .3, (y0 + y1) / 2, x1, y1); g.stroke();
+      if (depth > 0) {
+        branch(x1, y1, ang - 0.35 - r() * 0.3, len * 0.72, w * 0.62, depth - 1);
+        branch(x1, y1, ang + 0.3 + r() * 0.3, len * 0.7, w * 0.62, depth - 1);
+      } else blooms.push([x1, y1]);
+    };
+    const blooms = [];
+    branch(x, y + 4, -Math.PI / 2 - 0.05, 95 * s, 16 * s, 4);
+    // canopy: clusters of pink puffs, dark underside first for depth
+    for (const pass of [0, 1, 2]) for (const [bx, by] of blooms) {
+      for (let k = 0; k < 3; k++) {
+        const rr = (14 + r() * 16) * s, ox = (r() - .5) * 30 * s, oy = (r() - .5) * 24 * s + (pass === 0 ? 6 * s : pass === 2 ? -6 * s : 0);
+        g.fillStyle = P.bloom[pass === 0 ? 3 : pass === 1 ? Math.floor(r() * 2) : 2];
+        g.beginPath(); g.arc(bx + ox, by + oy, rr * (pass === 2 ? 0.55 : 1), 0, 7); g.fill();
+      }
+    }
+    tree = { x, y, top: Math.min(...blooms.map(b => b[1])), left: Math.min(...blooms.map(b => b[0])), right: Math.max(...blooms.map(b => b[0])) };
+  }
+  let tree = { x: 0, y: 0, top: 0, left: 0, right: 0 };
+
+  function makeCloud(P, scale) {
+    const w = 260 * scale, h = 110 * scale, [c, g] = canvas(w, h), r = Math.random;
+    const puffs = [];
+    for (let i = 0; i < 7; i++) {
+      const u = i / 6, rr = (26 + 22 * Math.sin(u * Math.PI) + r() * 10) * scale;
+      puffs.push([30 * scale + u * (w - 60 * scale), h - 22 * scale - Math.sin(u * Math.PI) * 30 * scale - r() * 8 * scale, rr]);
+    }
+    g.fillStyle = P.cloud[1];
+    for (const [x, y, rr] of puffs) { g.beginPath(); g.arc(x, y, rr, 0, 7); g.fill(); }
+    g.fillRect(30 * scale, h - 24 * scale, w - 60 * scale, 12 * scale);
+    g.fillStyle = P.cloud[0];
+    for (const [x, y, rr] of puffs) { g.beginPath(); g.arc(x - rr * 0.12, y - rr * 0.18, rr * 0.86, 0, 7); g.fill(); }
+    return { c, w, h };
+  }
+
+  function build() {
+    dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+    W = innerWidth; H = innerHeight;
+    cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+    mode = getComputedStyle(document.documentElement).getPropertyValue('--scene').trim() === 'day' ? 'day' : 'night';
+    const P = PAL[mode];
+    sky = buildSky(P); back = buildBack(P); front = buildFront(P);
+    clouds = [];
+    const n = Math.max(4, Math.round(W / 260));
+    for (let i = 0; i < n; i++) {
+      const depth = 0.5 + Math.random() * 0.7, cl = makeCloud(P, depth * Math.min(1.3, W / 1100 + 0.5));
+      clouds.push({ ...cl, x: Math.random() * (W + cl.w) - cl.w, y: H * (0.03 + Math.random() * 0.22), v: 6 + depth * 10, a: mode === 'day' ? 0.95 : 0.8 });
+    }
+    clouds.sort((a, b) => a.v - b.v);
+    blades = [];
+    const bc = Math.round(W / 4);
+    for (let i = 0; i < bc; i++) {
+      const x = Math.random() * W, onBack = Math.random() < 0.3;
+      blades.push({ x, y: (onBack ? backHillY(x) : frontHillY(x)) + 2 + Math.random() * 3, h: (onBack ? 6 : 10) + Math.random() * (onBack ? 8 : 16), c: P.grass[i % 4], ph: Math.random() * 6 });
+    }
+    petals = []; flies = []; stars = [];
+    const pc = mode === 'day' ? 34 : 14;
+    for (let i = 0; i < pc; i++) petals.push(newPetal(true));
+    if (mode === 'night') {
+      for (let i = 0; i < 160; i++) stars.push({ x: Math.random() * W, y: Math.random() * horizon() * 0.85, r: Math.random() * 1.3 + 0.3, ph: Math.random() * 6, sp: 0.6 + Math.random() * 1.8 });
+      for (let i = 0; i < 28; i++) flies.push({ x: Math.random() * W, y: H * (0.68 + Math.random() * 0.3), ph: Math.random() * 6, sp: 0.3 + Math.random() * 0.5, r: 1.6 + Math.random() * 1.6 });
+    }
+  }
+
+  function newPetal(anywhere) {
+    const P = PAL[mode], fromTree = Math.random() < 0.55;
+    return {
+      x: anywhere ? Math.random() * W : fromTree ? rand(tree.left, tree.right) : rand(-60, W * 0.6),
+      y: anywhere ? Math.random() * H : fromTree ? rand(tree.top, tree.y - 40) : -20,
+      vx: rand(18, 42), vy: rand(14, 30), rot: rand(0, 6), spin: rand(-1.5, 1.5), flip: rand(0, 6), fs: rand(1.5, 3.5),
+      s: rand(3, 6) * Math.min(1.3, Math.max(0.8, W / 1200)), c: P.petal[Math.floor(Math.random() * P.petal.length)], ph: rand(0, 6)
+    };
+  }
+
+  function frame(dt) {
+    const P = PAL[mode], hz = horizon();
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.drawImage(sky, 0, 0, W, H);
+    for (const s of stars) { ctx.globalAlpha = 0.35 + 0.65 * (0.5 + 0.5 * Math.sin(t * s.sp + s.ph)); ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, 7); ctx.fill(); }
+    ctx.globalAlpha = 1;
+    for (const c of clouds) {
+      c.x += c.v * dt; if (c.x > W) c.x = -c.w;
+      ctx.globalAlpha = c.a; ctx.drawImage(c.c, c.x, c.y + Math.sin(t * 0.2 + c.v) * 2, c.w, c.h);
+    }
+    ctx.globalAlpha = 1;
+    ctx.drawImage(back, 0, 0, W, H);
+    // water: sun/moon reflection column and drifting sparkle lines
+    const sp = sunPos(), waterBottom = H * 0.8;
+    for (let y = hz + 4, i = 0; y < waterBottom; y += 5, i++) {
+      const k = (y - hz) / (waterBottom - hz), wdt = (18 + k * 50) * (0.6 + 0.4 * Math.sin(t * 1.4 + i * 1.7));
+      ctx.fillStyle = P.glow + (0.55 * (1 - k * 0.7)) + ')';
+      ctx.fillRect(sp.x - wdt / 2 + Math.sin(t + i) * 4, y, wdt, 1.6);
+    }
+    ctx.fillStyle = mode === 'day' ? 'rgba(255,255,255,.55)' : 'rgba(200,210,255,.3)';
+    for (let i = 0; i < 40; i++) {
+      const y = hz + 6 + ((i * 37) % (waterBottom - hz - 8)), x = ((i * 211 + t * (8 + i % 5 * 3)) % (W + 80)) - 40;
+      const a = 0.5 + 0.5 * Math.sin(t * 2 + i); ctx.globalAlpha = a; ctx.fillRect(x, y, 14 + (i % 4) * 8, 1.2);
+    }
+    ctx.globalAlpha = 1;
+    ctx.drawImage(front, 0, 0, W, H);
+    // grass swaying in the breeze (gusts travel left to right)
+    ctx.lineCap = 'round'; ctx.lineWidth = 1.6;
+    for (const b of blades) {
+      const gust = Math.sin(t * 1.3 - b.x * 0.012 + b.ph * 0.2) * 0.5 + Math.sin(t * 0.7 - b.x * 0.004) * 0.5;
+      const lean = b.h * (0.25 + 0.35 * gust);
+      ctx.strokeStyle = b.c; ctx.beginPath(); ctx.moveTo(b.x, b.y);
+      ctx.quadraticCurveTo(b.x + lean * 0.3, b.y - b.h * 0.6, b.x + lean, b.y - b.h); ctx.stroke();
+    }
+    // falling petals
+    for (let i = 0; i < petals.length; i++) {
+      const p = petals[i];
+      p.x += (p.vx + Math.sin(t * 0.8) * 12) * dt; p.y += (p.vy + Math.sin(t * 2 + p.ph) * 10) * dt;
+      p.rot += p.spin * dt; p.flip += p.fs * dt;
+      if (p.x > W + 20 || p.y > H + 20) { petals[i] = newPetal(false); continue; }
+      ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot); ctx.scale(Math.cos(p.flip), 1);
+      ctx.fillStyle = p.c; ctx.beginPath(); ctx.ellipse(0, 0, p.s, p.s * 0.6, 0, 0, 7); ctx.fill(); ctx.restore();
+    }
+    // fireflies
+    for (const f of flies) {
+      f.x += Math.cos(t * f.sp + f.ph) * 12 * dt; f.y += Math.sin(t * f.sp * 1.3 + f.ph) * 8 * dt;
+      const a = Math.max(0, Math.sin(t * 1.5 * f.sp + f.ph * 3));
+      const gl = ctx.createRadialGradient(f.x, f.y, 0, f.x, f.y, f.r * 6);
+      gl.addColorStop(0, `rgba(255,240,150,${0.9 * a})`); gl.addColorStop(1, 'rgba(255,240,150,0)');
+      ctx.fillStyle = gl; ctx.beginPath(); ctx.arc(f.x, f.y, f.r * 6, 0, 7); ctx.fill();
+    }
+  }
+
+  function loop(now) {
+    const dt = Math.min(0.05, (now - last) / 1000 || 0); last = now; t += dt;
+    frame(dt);
+    raf = requestAnimationFrame(loop);
+  }
+  function start() {
+    cancelAnimationFrame(raf);
+    const sc = SCENES.find(s => s.id === scene);
+    sel.value = scene;
+    document.body.classList.toggle('no-scenery', sc.type === 'off');
+    document.body.classList.toggle('canvas-scene', sc.type === 'canvas');
+    document.body.classList.toggle('video-scene', sc.type === 'video');
+    if (sc.type === 'video') {
+      if (vid.dataset.id !== sc.id) { vid.poster = sc.poster; vid.src = sc.src; vid.dataset.id = sc.id; }
+      if (reduce.matches || document.hidden) vid.pause(); else vid.play().catch(() => {});
+      const c = sc.credit;
+      credit.innerHTML = `<span>Background: <a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.title)}</a>${c.author ? ' by ' + esc(c.author) : ''}, ${esc(c.license)}, via Wikimedia Commons</span>`;
+    } else if (vid.dataset.id) { vid.pause(); vid.removeAttribute('src'); vid.removeAttribute('poster'); vid.dataset.id = ''; vid.load(); }
+    if (sc.type === 'canvas') credit.innerHTML = '<span>Background: Sakura Hills, drawn in code for this timer</span>';
+    if (sc.type !== 'canvas') return;
+    build();
+    if (reduce.matches || document.hidden) { frame(0); return; }
+    last = performance.now(); raf = requestAnimationFrame(loop);
+  }
+
+  let rt; addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(start, 150); });
+  document.addEventListener('visibilitychange', () => { if (document.hidden) { cancelAnimationFrame(raf); vid.pause(); } else start(); });
+  matchMedia('(prefers-color-scheme: dark)').addEventListener('change', start);
+  reduce.addEventListener('change', start);
+  new MutationObserver(start).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+  sel.addEventListener('change', () => {
+    scene = sel.value; sel.blur();
+    try { localStorage.setItem('cube-timer-scene', scene); } catch (e) {}
+    start();
+  });
+  start();
+})();
+</script>
+</body>
+</html>
