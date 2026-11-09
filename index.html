@@ -93,20 +93,14 @@
     #bottom { grid-template-columns: 1fr; }
   }
   /* ---------- scenery background ---------- */
-  :root { --glass: rgba(14, 18, 34, .58); --halo: rgba(6, 10, 30, .6); --scene: night; --shade: rgba(4, 8, 20, .38); }
+  :root { --glass: rgba(14, 18, 34, .58); --halo: rgba(6, 10, 30, .6); --scene: night; }
   @media (prefers-color-scheme: light) {
-    :root:not([data-theme="dark"]) { --glass: rgba(255, 255, 255, .62); --halo: rgba(255, 255, 255, .85); --scene: day; --shade: rgba(255, 255, 255, .12); }
+    :root:not([data-theme="dark"]) { --glass: rgba(255, 255, 255, .62); --halo: rgba(255, 255, 255, .85); --scene: day; }
   }
-  :root[data-theme="light"] { --glass: rgba(255, 255, 255, .62); --halo: rgba(255, 255, 255, .85); --scene: day; --shade: rgba(255, 255, 255, .12); }
+  :root[data-theme="light"] { --glass: rgba(255, 255, 255, .62); --halo: rgba(255, 255, 255, .85); --scene: day; }
   #scenery { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 0; pointer-events: none; display: block; }
   body > *:not(.bg-layer):not(script) { position: relative; z-index: 1; }
-  #sceneVideo, #sceneShade { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 0; pointer-events: none; object-fit: cover; }
-  #sceneShade { background: var(--shade); }
-  body:not(.canvas-scene) #scenery, body:not(.video-scene) #sceneVideo, body:not(.video-scene) #sceneShade { display: none; }
-  #credit { text-align: right; font-size: 12px; color: var(--muted); padding-block: 0 12px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
-  #credit span { display: inline-block; background: var(--glass); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); border-radius: 8px; padding: 3px 10px; }
-  #credit a { color: inherit; }
-  body.no-scenery #credit { display: none; }
+  body:not(.canvas-scene) #scenery { display: none; }
   header, .card { background: var(--glass); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); }
   #scramble, #hint {
     display: inline-block; background: var(--glass); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
@@ -117,8 +111,6 @@
 </head>
 <body>
 <canvas id="scenery" class="bg-layer" aria-hidden="true"></canvas>
-<video id="sceneVideo" class="bg-layer" muted loop playsinline preload="auto" aria-hidden="true"></video>
-<div id="sceneShade" class="bg-layer" aria-hidden="true"></div>
 <header>
   <h1>🧊 Cube Timer</h1>
   <div class="controls">
@@ -166,8 +158,6 @@
     <div id="netNote" hidden>Preview available for 2x2 and 3x3.</div>
   </div>
 </div>
-
-<footer id="credit"></footer>
 
 <script>
 (() => {
@@ -518,275 +508,669 @@
 </script>
 <script>
 (() => {
-  // Procedural, looping anime-style landscape. Day in light theme, dusk with fireflies in dark theme.
+  // Procedural, looping anime-style scenes. Each has a day look (light theme) and a night look (dark theme).
   const cv = document.getElementById('scenery'), ctx = cv.getContext('2d');
-  const sel = document.getElementById('sceneSel'), vid = document.getElementById('sceneVideo'), credit = document.getElementById('credit');
+  const sel = document.getElementById('sceneSel');
   const reduce = matchMedia('(prefers-reduced-motion: reduce)');
-  const SCENES = [{ id: 'sakura', name: 'Sakura Hills (animated)', type: 'canvas' }].concat(/*VIDEO_SCENES*/[]).concat([{ id: 'off', name: 'Off', type: 'off' }]);
+
+  let W = 0, H = 0, dpr = 1, mode = 'day', t = 0, raf = 0, last = 0, cur = null;
+
+  // ---------- shared helpers ----------
+  const rng = seed => () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let x = Math.imul(seed ^ seed >>> 15, 1 | seed); x = x + Math.imul(x ^ x >>> 7, 61 | x) ^ x; return ((x ^ x >>> 14) >>> 0) / 4294967296; };
+  const rand = (a, b) => a + Math.random() * (b - a);
+  const pick = a => a[Math.floor(Math.random() * a.length)];
+  const S0 = () => Math.min(W, H) / 800; // size scale
+
+  function canvas(w = W, h = H) { const c = document.createElement('canvas'); c.width = Math.ceil(w * dpr); c.height = Math.ceil(h * dpr); const g = c.getContext('2d'); g.scale(dpr, dpr); return [c, g]; }
+  function skyGrad(g, cols, y1) {
+    const gr = g.createLinearGradient(0, 0, 0, y1);
+    gr.addColorStop(0, cols[0]); gr.addColorStop(0.55, cols[1]); gr.addColorStop(1, cols[2]);
+    g.fillStyle = gr; g.fillRect(0, 0, W, Math.max(y1, H));
+  }
+  function disc(g, x, y, r, fill, glowRgb, crescentCol) {
+    const gl = g.createRadialGradient(x, y, r * 0.5, x, y, r * 6);
+    gl.addColorStop(0, glowRgb + '0.55)'); gl.addColorStop(1, glowRgb + '0)');
+    g.fillStyle = gl; g.fillRect(x - r * 6, y - r * 6, r * 12, r * 12);
+    g.fillStyle = fill; g.beginPath(); g.arc(x, y, r, 0, 7); g.fill();
+    if (crescentCol) { g.fillStyle = crescentCol; g.globalAlpha = 0.85; g.beginPath(); g.arc(x + r * 0.45, y - r * 0.2, r * 0.9, 0, 7); g.fill(); g.globalAlpha = 1; }
+  }
+  function ridgePts(base, amp, seed, rough, freq = 1) {
+    const r = rng(seed), ph = [r() * 6, r() * 6, r() * 6, r() * 6], pts = [];
+    for (let x = 0; x <= W + 4; x += 4) {
+      const u = x / W * freq;
+      const h = 0.55 + 0.25 * Math.sin(u * 3.1 + ph[0]) + 0.13 * Math.sin(u * 7.3 + ph[1]) + rough * (0.06 * Math.sin(u * 19 + ph[2]) + 0.03 * Math.sin(u * 41 + ph[3]));
+      pts.push([x, base - Math.max(0.05, h) * amp]);
+    }
+    return pts;
+  }
+  const ptsY = (pts, x) => pts[Math.max(0, Math.min(pts.length - 1, Math.round(x / 4)))][1];
+  function fillPts(g, pts, fill) { g.fillStyle = fill; g.beginPath(); g.moveTo(0, H); for (const p of pts) g.lineTo(p[0], p[1]); g.lineTo(W, H); g.closePath(); g.fill(); }
+  function makeCloud(cols, scale) {
+    const w = 260 * scale, h = 110 * scale, [c, g] = canvas(w, h), puffs = [];
+    for (let i = 0; i < 7; i++) {
+      const u = i / 6, rr = (26 + 22 * Math.sin(u * Math.PI) + Math.random() * 10) * scale;
+      puffs.push([30 * scale + u * (w - 60 * scale), h - 22 * scale - Math.sin(u * Math.PI) * 30 * scale - Math.random() * 8 * scale, rr]);
+    }
+    g.fillStyle = cols[1];
+    for (const [x, y, rr] of puffs) { g.beginPath(); g.arc(x, y, rr, 0, 7); g.fill(); }
+    g.fillRect(30 * scale, h - 24 * scale, w - 60 * scale, 12 * scale);
+    g.fillStyle = cols[0];
+    for (const [x, y, rr] of puffs) { g.beginPath(); g.arc(x - rr * 0.12, y - rr * 0.18, rr * 0.86, 0, 7); g.fill(); }
+    return { c, w, h };
+  }
+  function makeClouds(cols, y0, y1, alpha = 0.92) {
+    const out = [], n = Math.max(4, Math.round(W / 260));
+    for (let i = 0; i < n; i++) {
+      const depth = 0.5 + Math.random() * 0.7, cl = makeCloud(cols, depth * Math.min(1.3, W / 1100 + 0.5));
+      out.push({ ...cl, x: Math.random() * (W + cl.w) - cl.w, y: rand(y0, y1), v: 6 + depth * 10, a: alpha });
+    }
+    return out.sort((a, b) => a.v - b.v);
+  }
+  function drawClouds(list, dt) {
+    for (const c of list) {
+      c.x += c.v * dt; if (c.x > W) c.x = -c.w;
+      ctx.globalAlpha = c.a; ctx.drawImage(c.c, c.x, c.y + Math.sin(t * 0.2 + c.v) * 2, c.w, c.h);
+    }
+    ctx.globalAlpha = 1;
+  }
+  const makeStars = (n, yMax) => Array.from({ length: n }, () => ({ x: Math.random() * W, y: Math.random() * yMax, r: Math.random() * 1.3 + 0.3, ph: Math.random() * 6, sp: 0.6 + Math.random() * 1.8 }));
+  function drawStars(list) {
+    ctx.fillStyle = '#fff';
+    for (const s of list) { ctx.globalAlpha = 0.35 + 0.65 * (0.5 + 0.5 * Math.sin(t * s.sp + s.ph)); ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, 7); ctx.fill(); }
+    ctx.globalAlpha = 1;
+  }
+  const makeBirds = (n, y0, y1) => Array.from({ length: n }, () => ({ x: Math.random() * W, y: rand(y0, y1), v: rand(25, 45), s: rand(4, 8) * Math.max(0.8, S0()), ph: Math.random() * 6 }));
+  function drawBirds(list, dt, color) {
+    ctx.strokeStyle = color; ctx.lineWidth = 1.6; ctx.lineCap = 'round';
+    for (const b of list) {
+      b.x += b.v * dt; b.y += Math.sin(t * 0.7 + b.ph) * 4 * dt;
+      if (b.x > W + 20) { b.x = -20; b.y = rand(H * 0.1, H * 0.35); }
+      const f = Math.sin(t * 7 + b.ph) * b.s * 0.6;
+      ctx.beginPath(); ctx.moveTo(b.x - b.s, b.y - f); ctx.quadraticCurveTo(b.x - b.s * 0.4, b.y - b.s * 0.3, b.x, b.y);
+      ctx.quadraticCurveTo(b.x + b.s * 0.4, b.y - b.s * 0.3, b.x + b.s, b.y - f); ctx.stroke();
+    }
+  }
+  const makeFlies = (n, y0, y1) => Array.from({ length: n }, () => ({ x: Math.random() * W, y: rand(y0, y1), ph: Math.random() * 6, sp: 0.3 + Math.random() * 0.5, r: 1.6 + Math.random() * 1.6 }));
+  function drawFlies(list, dt) {
+    for (const f of list) {
+      f.x += Math.cos(t * f.sp + f.ph) * 12 * dt; f.y += Math.sin(t * f.sp * 1.3 + f.ph) * 8 * dt;
+      const a = Math.max(0, Math.sin(t * 1.5 * f.sp + f.ph * 3));
+      const gl = ctx.createRadialGradient(f.x, f.y, 0, f.x, f.y, f.r * 6);
+      gl.addColorStop(0, `rgba(255,240,150,${0.9 * a})`); gl.addColorStop(1, 'rgba(255,240,150,0)');
+      ctx.fillStyle = gl; ctx.fillRect(f.x - f.r * 6, f.y - f.r * 6, f.r * 12, f.r * 12);
+    }
+  }
+  function shimmer(y0, y1, x0, x1, n, color, speed = 1) {
+    ctx.fillStyle = color;
+    for (let i = 0; i < n; i++) {
+      const y = y0 + ((i * 37) % Math.max(1, y1 - y0)), span = x1 - x0 + 80;
+      const x = x0 - 40 + ((i * 211 + t * (8 + i % 5 * 3) * speed) % span);
+      ctx.globalAlpha = 0.5 + 0.5 * Math.sin(t * 2 + i); ctx.fillRect(x, y, 14 + (i % 4) * 8, 1.2);
+    }
+    ctx.globalAlpha = 1;
+  }
+  function blob(g, cx, cy, r, cols, seed) { // anime-style foliage: dark base, mid body, light top-left
+    const q = rng(seed);
+    const pass = (col, k, dx, dy, n) => { g.fillStyle = col; for (let i = 0; i < n; i++) { const a = q() * 6.28, d = q() * r * 0.6; g.beginPath(); g.arc(cx + Math.cos(a) * d + dx, cy + Math.sin(a) * d * 0.7 + dy, r * (0.32 + q() * 0.28) * k, 0, 7); g.fill(); } };
+    pass(cols[0], 1, 0, r * 0.12, 9); pass(cols[1], 0.85, -r * 0.06, -r * 0.04, 8); pass(cols[2], 0.5, -r * 0.18, -r * 0.2, 5);
+  }
+  function pine(g, x, base, h, col) {
+    g.fillStyle = col; g.beginPath();
+    g.moveTo(x, base - h); g.lineTo(x - h * 0.2, base - h * 0.4); g.lineTo(x + h * 0.2, base - h * 0.4); g.closePath();
+    g.moveTo(x, base - h * 0.72); g.lineTo(x - h * 0.3, base); g.lineTo(x + h * 0.3, base); g.closePath(); g.fill();
+  }
+  function rr(g, x, y, w, h, r) { g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r); g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath(); }
+
+  // ---------- Sakura hills ----------
+  function sakura() {
+    const PAL = {
+      day: { sky: ['#5aa6e6', '#9fd0f2', '#ffe7c4'], sun: '#fff6dc', glow: 'rgba(255,236,190,', mtnFar: '#a9c3e3', mtnNear: '#86a7d4', water: ['#bfe0f5', '#7fb3dd'], hillBack: '#8fcb6e', hillFront: '#64ab4c', hillShade: '#4f9440', grass: ['#5fa845', '#74bb55', '#4c9139', '#86c862'], cloud: ['#ffffff', '#dfe9f8'], trunk: '#6b4a3a', bloom: ['#f9c2d2', '#f5a3bb', '#fde0e8', '#f08fac'], petal: ['#f8b7ca', '#fcd5e0', '#f39bb6'], flower: ['#ffffff', '#ffe27a', '#ffd1e0'] },
+      night: { sky: ['#0d1638', '#2b3270', '#d98a86'], sun: '#f4f1e2', glow: 'rgba(220,225,255,', mtnFar: '#3a3f7a', mtnNear: '#272c5e', water: ['#3c3f78', '#161c44'], hillBack: '#1f3d3c', hillFront: '#16302e', hillShade: '#10241f', grass: ['#1e4a3c', '#285a47', '#173b31', '#2f6650'], cloud: ['#5a5d98', '#33386e'], trunk: '#2a1c22', bloom: ['#b9789a', '#9b5f84', '#d495b0', '#8a4f74'], petal: ['#c98aa8', '#e2aec4', '#a96d90'], flower: ['#d9d6ff', '#fff2a8', '#e6b3cc'] }
+    };
+    let S, tree;
+    const hz = () => H * 0.6;
+    const backHillY = x => H * 0.8 - Math.sin(x / W * Math.PI * 1.3 + 0.6) * H * 0.045;
+    const frontHillY = x => H * 0.88 - Math.exp(-((((x / W) - 0.13) / 0.2) ** 2)) * H * 0.16 - Math.sin(x / W * 7) * H * 0.008;
+    const sunPos = () => mode === 'day' ? { x: W * 0.7, y: hz() - H * 0.13 } : { x: W * 0.8, y: H * 0.16 };
+    function drawTree(g, P) {
+      const x = W * 0.13, y = frontHillY(x), s = Math.min(W, H) / 700, r = rng(42), blooms = [];
+      g.strokeStyle = P.trunk; g.lineCap = 'round';
+      const branch = (x0, y0, ang, len, w, depth) => {
+        const x1 = x0 + Math.cos(ang) * len, y1 = y0 + Math.sin(ang) * len;
+        g.lineWidth = w; g.beginPath(); g.moveTo(x0, y0); g.quadraticCurveTo((x0 + x1) / 2 + (r() - .5) * len * .3, (y0 + y1) / 2, x1, y1); g.stroke();
+        if (depth > 0) { branch(x1, y1, ang - 0.35 - r() * 0.3, len * 0.72, w * 0.62, depth - 1); branch(x1, y1, ang + 0.3 + r() * 0.3, len * 0.7, w * 0.62, depth - 1); }
+        else blooms.push([x1, y1]);
+      };
+      branch(x, y + 4, -Math.PI / 2 - 0.05, 95 * s, 16 * s, 4);
+      for (const pass of [0, 1, 2]) for (const [bx, by] of blooms) for (let k = 0; k < 3; k++) {
+        const rad = (14 + r() * 16) * s, ox = (r() - .5) * 30 * s, oy = (r() - .5) * 24 * s + (pass === 0 ? 6 * s : pass === 2 ? -6 * s : 0);
+        g.fillStyle = P.bloom[pass === 0 ? 3 : pass === 1 ? Math.floor(r() * 2) : 2];
+        g.beginPath(); g.arc(bx + ox, by + oy, rad * (pass === 2 ? 0.55 : 1), 0, 7); g.fill();
+      }
+      tree = { y, top: Math.min(...blooms.map(b => b[1])), left: Math.min(...blooms.map(b => b[0])), right: Math.max(...blooms.map(b => b[0])) };
+    }
+    function newPetal(anywhere) {
+      const P = PAL[mode], fromTree = Math.random() < 0.55;
+      return {
+        x: anywhere ? Math.random() * W : fromTree ? rand(tree.left, tree.right) : rand(-60, W * 0.6),
+        y: anywhere ? Math.random() * H : fromTree ? rand(tree.top, tree.y - 40) : -20,
+        vx: rand(18, 42), vy: rand(14, 30), rot: rand(0, 6), spin: rand(-1.5, 1.5), flip: rand(0, 6), fs: rand(1.5, 3.5),
+        s: rand(3, 6) * Math.min(1.3, Math.max(0.8, W / 1200)), c: pick(P.petal), ph: rand(0, 6)
+      };
+    }
+    function build() {
+      const P = PAL[mode], h = hz();
+      const [sky, g] = canvas(); skyGrad(g, P.sky, h);
+      const s = sunPos(); disc(g, s.x, s.y, Math.min(W, H) * (mode === 'day' ? 0.055 : 0.045), P.sun, P.glow, mode === 'night' ? P.sky[1] : null);
+      const [back, b] = canvas();
+      fillPts(b, ridgePts(h + 2, H * 0.24, 11, 1), P.mtnFar); fillPts(b, ridgePts(h + 2, H * 0.15, 23, 0.6), P.mtnNear);
+      const wg = b.createLinearGradient(0, h, 0, H); wg.addColorStop(0, P.water[0]); wg.addColorStop(1, P.water[1]);
+      b.fillStyle = wg; b.fillRect(0, h, W, H - h);
+      const [front, f] = canvas(), r = rng(5);
+      f.fillStyle = P.hillBack; f.beginPath(); f.moveTo(0, H); for (let x = 0; x <= W + 4; x += 4) f.lineTo(x, backHillY(x)); f.lineTo(W, H); f.fill();
+      f.fillStyle = P.hillFront; f.beginPath(); f.moveTo(0, H); for (let x = 0; x <= W + 4; x += 4) f.lineTo(x, frontHillY(x)); f.lineTo(W, H); f.fill();
+      f.fillStyle = P.hillShade; f.beginPath(); f.moveTo(0, H); for (let x = 0; x <= W + 4; x += 4) f.lineTo(x, frontHillY(x) + H * 0.05 + Math.sin(x / 60) * 3); f.lineTo(W, H); f.fill();
+      for (let i = 0; i < Math.round(W / 14); i++) {
+        const x = r() * W, y = (r() < 0.6 ? frontHillY(x) : backHillY(x)) + 4 + r() * H * 0.08;
+        f.fillStyle = P.flower[Math.floor(r() * 3)]; f.globalAlpha = 0.85; f.beginPath(); f.arc(x, y, 1.2 + r() * 1.4, 0, 7); f.fill();
+      }
+      f.globalAlpha = 1; drawTree(f, P);
+      const blades = [];
+      for (let i = 0; i < Math.round(W / 4); i++) {
+        const x = Math.random() * W, onBack = Math.random() < 0.3;
+        blades.push({ x, y: (onBack ? backHillY(x) : frontHillY(x)) + 2 + Math.random() * 3, h: (onBack ? 6 : 10) + Math.random() * (onBack ? 8 : 16), c: P.grass[i % 4], ph: Math.random() * 6 });
+      }
+      S = { sky, back, front, blades, clouds: makeClouds(P.cloud, H * 0.03, H * 0.25, mode === 'day' ? 0.95 : 0.8), petals: [], stars: mode === 'night' ? makeStars(160, h * 0.85) : [], flies: mode === 'night' ? makeFlies(28, H * 0.68, H * 0.98) : [] };
+      for (let i = 0; i < (mode === 'day' ? 34 : 14); i++) S.petals.push(newPetal(true));
+    }
+    function frame(dt) {
+      const P = PAL[mode], h = hz(), sp = sunPos(), wb = H * 0.8;
+      ctx.drawImage(S.sky, 0, 0, W, H); drawStars(S.stars); drawClouds(S.clouds, dt);
+      ctx.drawImage(S.back, 0, 0, W, H);
+      for (let y = h + 4, i = 0; y < wb; y += 5, i++) {
+        const k = (y - h) / (wb - h), w = (18 + k * 50) * (0.6 + 0.4 * Math.sin(t * 1.4 + i * 1.7));
+        ctx.fillStyle = P.glow + (0.55 * (1 - k * 0.7)) + ')'; ctx.fillRect(sp.x - w / 2 + Math.sin(t + i) * 4, y, w, 1.6);
+      }
+      shimmer(h + 6, wb - 2, 0, W, 40, mode === 'day' ? 'rgba(255,255,255,.55)' : 'rgba(200,210,255,.3)');
+      ctx.drawImage(S.front, 0, 0, W, H);
+      ctx.lineCap = 'round'; ctx.lineWidth = 1.6;
+      for (const b of S.blades) {
+        const gust = Math.sin(t * 1.3 - b.x * 0.012 + b.ph * 0.2) * 0.5 + Math.sin(t * 0.7 - b.x * 0.004) * 0.5, lean = b.h * (0.25 + 0.35 * gust);
+        ctx.strokeStyle = b.c; ctx.beginPath(); ctx.moveTo(b.x, b.y); ctx.quadraticCurveTo(b.x + lean * 0.3, b.y - b.h * 0.6, b.x + lean, b.y - b.h); ctx.stroke();
+      }
+      for (let i = 0; i < S.petals.length; i++) {
+        const p = S.petals[i];
+        p.x += (p.vx + Math.sin(t * 0.8) * 12) * dt; p.y += (p.vy + Math.sin(t * 2 + p.ph) * 10) * dt; p.rot += p.spin * dt; p.flip += p.fs * dt;
+        if (p.x > W + 20 || p.y > H + 20) { S.petals[i] = newPetal(false); continue; }
+        ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot); ctx.scale(Math.cos(p.flip), 1);
+        ctx.fillStyle = p.c; ctx.beginPath(); ctx.ellipse(0, 0, p.s, p.s * 0.6, 0, 0, 7); ctx.fill(); ctx.restore();
+      }
+      drawFlies(S.flies, dt);
+    }
+    return { build, frame };
+  }
+
+  // ---------- Ocean shore ----------
+  function ocean() {
+    const PAL = {
+      day: { sky: ['#4fa3e3', '#9ad2f5', '#fff0d6'], sun: '#fff7e0', glow: 'rgba(255,240,200,', island: '#6f95c2', sea: ['#86cdea', '#2f8cc8', '#1c6aa6'], haze: 'rgba(255,255,255,.5)', wave: '#ffffff', sand: ['#f3dfb1', '#e0c38c'], speck: '#b8986a', wash: 'rgba(150,215,240,.75)', foam: '#ffffff', cloud: ['#ffffff', '#dce8f7'], bird: '#3a4a63', trunk: '#8a6a4c', leaf: ['#2f7a45', '#3f9257'] },
+      night: { sky: ['#0b1433', '#25306b', '#c97b86'], sun: '#f4f1e2', glow: 'rgba(220,225,255,', island: '#262b5c', sea: ['#4a4f8a', '#1f2a5c', '#121a40'], haze: 'rgba(230,160,170,.35)', wave: '#c7d0ff', sand: ['#4a4560', '#353049'], speck: '#6b6585', wash: 'rgba(60,75,140,.75)', foam: '#cbd2f7', cloud: ['#5a5d98', '#33386e'], bird: '#000', trunk: '#1d1826', leaf: ['#122426', '#183032'] }
+    };
+    let S;
+    const hz = () => H * 0.52, shoreY = x => H * 0.84 + Math.sin(x / W * 2.4 + 0.4) * H * 0.025;
+    const sunPos = () => mode === 'day' ? { x: W * 0.58, y: hz() - H * 0.09 } : { x: W * 0.62, y: H * 0.15 };
+    function build() {
+      const P = PAL[mode], h = hz(), [sky, g] = canvas();
+      skyGrad(g, P.sky, h);
+      const s = sunPos(); disc(g, s.x, s.y, Math.min(W, H) * 0.05, P.sun, P.glow, mode === 'night' ? P.sky[1] : null);
+      g.fillStyle = P.island; g.beginPath(); const x0 = W * 0.04, x1 = W * 0.34; g.moveTo(x0, h + 1);
+      for (let x = x0; x <= x1; x += 4) { const u = (x - x0) / (x1 - x0); g.lineTo(x, h - Math.pow(Math.sin(Math.PI * u), 1.4) * H * 0.05 * (1 + 0.12 * Math.sin(u * 17))); }
+      g.lineTo(x1, h + 1); g.fill();
+      const sg = g.createLinearGradient(0, h, 0, H); sg.addColorStop(0, P.sea[0]); sg.addColorStop(0.35, P.sea[1]); sg.addColorStop(1, P.sea[2]);
+      g.fillStyle = sg; g.fillRect(0, h, W, H - h); g.fillStyle = P.haze; g.fillRect(0, h - 1, W, 2);
+      const [sand, d] = canvas(), r = rng(9);
+      const grd = d.createLinearGradient(0, H * 0.8, 0, H); grd.addColorStop(0, P.sand[0]); grd.addColorStop(1, P.sand[1]);
+      d.fillStyle = grd; d.beginPath(); d.moveTo(0, H); for (let x = 0; x <= W + 4; x += 4) d.lineTo(x, shoreY(x)); d.lineTo(W, H); d.fill();
+      d.fillStyle = P.speck; d.globalAlpha = 0.5;
+      for (let i = 0; i < W / 10; i++) { const x = r() * W, y = shoreY(x) + H * 0.04 + r() * H * 0.12; d.beginPath(); d.arc(x, y, 0.8 + r() * 1.5, 0, 7); d.fill(); }
+      d.globalAlpha = 1;
+      S = { sky, sand, clouds: makeClouds(P.cloud, H * 0.03, H * 0.22), stars: mode === 'night' ? makeStars(150, h * 0.9) : [], birds: mode === 'day' ? makeBirds(6, H * 0.1, H * 0.38) : [] };
+    }
+    function leaf(x, y, a, L, col) {
+      const ex = x + Math.cos(a) * L, ey = y + Math.sin(a) * L * 0.55 + L * 0.38, cx = x + Math.cos(a) * L * 0.55, cy = y + Math.sin(a) * L * 0.55 - L * 0.1;
+      const nx = -Math.sin(a), ny = Math.cos(a), w = L * 0.13;
+      ctx.fillStyle = col; ctx.beginPath(); ctx.moveTo(x, y);
+      ctx.quadraticCurveTo(cx + nx * w, cy + ny * w - w, ex, ey); ctx.quadraticCurveTo(cx - nx * w, cy - ny * w + w * 0.4, x, y); ctx.fill();
+    }
+    function palm(P) {
+      const s = Math.max(0.7, S0()), tx = W - 120 * s, ty = H * 0.42;
+      ctx.strokeStyle = P.trunk; ctx.lineCap = 'round'; ctx.lineWidth = 16 * s;
+      ctx.beginPath(); ctx.moveTo(W - 20 * s, H + 10); ctx.quadraticCurveTo(W - 10 * s, H * 0.62, tx, ty); ctx.stroke();
+      for (let i = 0; i < 9; i++) {
+        const a = -Math.PI * 1.08 + i * (Math.PI * 1.2 / 8) + Math.sin(t * 0.9 + i * 0.7) * 0.05;
+        leaf(tx, ty, a, (130 + (i % 3) * 30) * s, P.leaf[i % 2]);
+      }
+      ctx.fillStyle = P.trunk; for (const [dx, dy] of [[-6, 8], [5, 10], [0, 14]]) { ctx.beginPath(); ctx.arc(tx + dx * s, ty + dy * s, 6 * s, 0, 7); ctx.fill(); }
+    }
+    function frame(dt) {
+      const P = PAL[mode], h = hz(), near = shoreY(W / 2) - 6, rows = 24;
+      ctx.drawImage(S.sky, 0, 0, W, H); drawStars(S.stars); drawClouds(S.clouds, dt);
+      ctx.fillStyle = P.wave;
+      for (let k = 0; k < rows; k++) {
+        const f = k / (rows - 1), y0 = h + 3 + Math.pow(f, 1.8) * (near - h - 3), len = 6 + f * 40, step = len * 2.6 + 20, amp = 0.5 + f * 3, off = (t * (4 + f * 18) + k * 53) % step;
+        for (let x = -step + off; x < W; x += step) {
+          ctx.globalAlpha = (0.12 + 0.3 * f) * (0.5 + 0.5 * Math.sin(t * 1.3 + x * 0.03 + k * 2));
+          ctx.fillRect(x, y0 + Math.sin(x * 0.015 + t * 1.2 + k) * amp, len, 1 + f * 1.5);
+        }
+      }
+      ctx.globalAlpha = 1;
+      const s = sunPos();
+      for (let y = h + 3, i = 0; y < near; y += 5, i++) {
+        const k = (y - h) / (near - h), w = (14 + k * 70) * (0.6 + 0.4 * Math.sin(t * 1.4 + i * 1.7));
+        ctx.fillStyle = P.glow + (0.6 * (1 - k * 0.6)) + ')'; ctx.fillRect(s.x - w / 2 + Math.sin(t + i) * 5, y, w, 1.6);
+      }
+      ctx.drawImage(S.sand, 0, 0, W, H);
+      const wash = (0.5 + 0.5 * Math.sin(t * 0.55)) * H * 0.045, edge = x => shoreY(x) + wash * (0.7 + 0.3 * Math.sin(x / 70 + t * 0.8));
+      ctx.fillStyle = P.wash; ctx.beginPath(); ctx.moveTo(0, shoreY(0) - 2);
+      for (let x = 0; x <= W + 6; x += 6) ctx.lineTo(x, edge(x));
+      for (let x = W + 6; x >= 0; x -= 6) ctx.lineTo(x, shoreY(x) - 2);
+      ctx.fill();
+      ctx.strokeStyle = P.foam; ctx.lineWidth = 2.5; ctx.globalAlpha = 0.85; ctx.beginPath();
+      for (let x = 0; x <= W + 6; x += 6) x ? ctx.lineTo(x, edge(x)) : ctx.moveTo(x, edge(x));
+      ctx.stroke(); ctx.globalAlpha = 0.45; ctx.lineWidth = 1.5; ctx.beginPath();
+      for (let x = 0; x <= W + 6; x += 6) { const y = edge(x) - H * 0.014 - Math.sin(x / 40 + t * 2) * 2; x ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
+      ctx.stroke(); ctx.globalAlpha = 1;
+      drawBirds(S.birds, dt, P.bird); palm(P);
+    }
+    return { build, frame };
+  }
+
+  // ---------- Mountain valley ----------
+  function mountains() {
+    const PAL = {
+      day: { sky: ['#3f8fdc', '#8cc4ef', '#e6f3fb'], sun: '#fff8e6', glow: 'rgba(255,245,215,', ridge: ['#b4c8e6', '#8ea9d6'], forest: ['#4f8a5e', '#3b7049'], snow: '#ffffff', snowShade: '#cddcf0', pine: ['#2c5a3b', '#21482f'], mist: '255,255,255', cloud: ['#ffffff', '#dde8f7'], bird: '#3a4a63', lake: ['#a7d0ee', '#6aa6d6'] },
+      night: { sky: ['#060d24', '#13214d', '#2a3a6e'], sun: '#eef0ff', glow: 'rgba(200,215,255,', ridge: ['#2c3a6c', '#222e5c'], forest: ['#14233a', '#0e1a2c'], snow: '#c8d2f2', snowShade: '#7d8cbc', pine: ['#0b1622', '#08111a'], mist: '150,170,230', cloud: ['#4a4f88', '#2c3266'], bird: '#000', lake: ['#2b3a6e', '#17224a'] }
+    };
+    let S;
+    const sideWeight = (pts, base, k) => pts.map(([x, y]) => [x, base - (base - y) * (k + (1 - k) * Math.abs(2 * x / W - 1))]);
+    function build() {
+      const P = PAL[mode], [sky, g] = canvas(), s = S0();
+      skyGrad(g, P.sky, H * 0.75);
+      if (mode === 'day') disc(g, W * 0.24, H * 0.2, Math.min(W, H) * 0.045, P.sun, P.glow);
+      else disc(g, W * 0.2, H * 0.17, Math.min(W, H) * 0.04, P.sun, P.glow, P.sky[1]);
+      const [back, b] = canvas();
+      const far = ridgePts(H * 0.62, H * 0.36, 3, 1, 1.15);
+      fillPts(b, far, P.ridge[0]);
+      b.save(); b.beginPath(); b.moveTo(0, H); for (const p of far) b.lineTo(p[0], p[1]); b.lineTo(W, H); b.closePath(); b.clip();
+      const minY = Math.min(...far.map(p => p[1])), snowLine = x => minY + H * 0.1 + Math.sin(x * 0.045) * H * 0.012 + Math.sin(x * 0.13) * H * 0.006;
+      const sgd = b.createLinearGradient(0, minY, 0, minY + H * 0.12); sgd.addColorStop(0, P.snow); sgd.addColorStop(1, P.snowShade);
+      b.fillStyle = sgd; b.beginPath(); b.moveTo(0, 0); for (let x = 0; x <= W + 4; x += 4) b.lineTo(x, snowLine(x)); b.lineTo(W, 0); b.fill();
+      b.restore();
+      fillPts(b, ridgePts(H * 0.7, H * 0.2, 8, 0.8, 1.6), P.ridge[1]);
+      const lg = b.createLinearGradient(0, H * 0.7, 0, H); lg.addColorStop(0, P.lake[0]); lg.addColorStop(1, P.lake[1]);
+      b.fillStyle = lg; b.fillRect(0, H * 0.71, W, H * 0.29);
+      const [front, f] = canvas();
+      const hills = sideWeight(ridgePts(H * 0.84, H * 0.16, 13, 0.4, 2.1), H * 0.84, 0.2);
+      fillPts(f, hills, P.forest[0]);
+      for (let x = 0; x < W; x += rand(6, 12) * Math.max(0.8, s)) { const y = ptsY(hills, x); if (y < H * 0.82) pine(f, x, y + 5, rand(12, 22) * Math.max(0.8, s), P.pine[0]); }
+      const near = sideWeight(ridgePts(H * 1.0, H * 0.2, 21, 0.3, 1.4), H, 0.15);
+      fillPts(f, near, P.forest[1]);
+      for (let x = 0; x < W; x += rand(10, 18) * Math.max(0.8, s)) { const y = ptsY(near, x); if (y < H * 0.97) pine(f, x, y + 8, rand(24, 42) * Math.max(0.8, s), P.pine[1]); }
+      const mist = (y, n) => Array.from({ length: n }, () => ({ x: Math.random() * W, y: y + rand(-H * 0.02, H * 0.02), w: rand(W * 0.2, W * 0.4), h: rand(H * 0.02, H * 0.04), v: rand(4, 10) }));
+      S = { sky, back, front, mist1: mist(H * 0.68, 5), mist2: mist(H * 0.82, 4), clouds: makeClouds(P.cloud, H * 0.02, H * 0.14, 0.85), stars: mode === 'night' ? makeStars(170, H * 0.55) : [], birds: mode === 'day' ? makeBirds(5, H * 0.15, H * 0.35) : [] };
+    }
+    function drawMist(list, rgb, dt) {
+      for (const m of list) {
+        m.x += m.v * dt; if (m.x - m.w > W) m.x = -m.w;
+        ctx.save(); ctx.translate(m.x, m.y); ctx.scale(m.w / m.h, 1);
+        const gr = ctx.createRadialGradient(0, 0, 0, 0, 0, m.h); gr.addColorStop(0, `rgba(${rgb},.35)`); gr.addColorStop(1, `rgba(${rgb},0)`);
+        ctx.fillStyle = gr; ctx.fillRect(-m.h, -m.h, m.h * 2, m.h * 2); ctx.restore();
+      }
+    }
+    function aurora() {
+      ctx.save(); ctx.globalCompositeOperation = 'lighter';
+      for (let i = 0; i < 3; i++) {
+        const base = H * (0.1 + i * 0.06), len = H * (0.13 - i * 0.025), c = i === 1 ? '120,170,255' : '90,255,180', a = 0.16 + 0.08 * Math.sin(t * 0.4 + i * 2);
+        const top = x => base + Math.sin(x * 0.004 + t * 0.25 + i * 1.7) * H * 0.04 + Math.sin(x * 0.013 - t * 0.4 + i) * H * 0.012;
+        const gr = ctx.createLinearGradient(0, base - H * 0.05, 0, base + len + H * 0.05);
+        gr.addColorStop(0, `rgba(${c},0)`); gr.addColorStop(0.35, `rgba(${c},${a})`); gr.addColorStop(1, `rgba(${c},0)`);
+        ctx.fillStyle = gr; ctx.beginPath();
+        for (let x = 0; x <= W + 8; x += 8) x ? ctx.lineTo(x, top(x)) : ctx.moveTo(x, top(x));
+        for (let x = W + 8; x >= 0; x -= 8) ctx.lineTo(x, top(x) + len * (0.7 + 0.3 * Math.sin(x * 0.01 + t * 0.6 + i)));
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+    function frame(dt) {
+      const P = PAL[mode];
+      ctx.drawImage(S.sky, 0, 0, W, H); drawStars(S.stars); if (mode === 'night') aurora(); drawClouds(S.clouds, dt);
+      ctx.drawImage(S.back, 0, 0, W, H);
+      shimmer(H * 0.72, H * 0.86, W * 0.15, W * 0.85, 30, mode === 'day' ? 'rgba(255,255,255,.6)' : 'rgba(190,205,255,.35)', 0.6);
+      drawMist(S.mist1, P.mist, dt);
+      ctx.drawImage(S.front, 0, 0, W, H);
+      drawMist(S.mist2, P.mist, dt);
+      drawBirds(S.birds, dt, P.bird);
+    }
+    return { build, frame };
+  }
+
+  // ---------- Forest waterfall ----------
+  function forest() {
+    const PAL = {
+      day: { sky: ['#9fd8f2', '#cdeef7', '#eaf8ee'], far: ['#7fb98d', '#8cc59a', '#a6d6ae'], cliff: '#7d8c99', cliffShade: '#66768a', cliffHi: '#a3b0ba', fall: ['#f2fbff', '#bfe6fa'], pond: ['#86cfe3', '#3f8fb8'], tree: ['#2f6f45', '#3f8a55', '#5aa86a'], trunk: '#5a4636', bush: ['#3e7d4c', '#4f9a5c', '#74bd78'], rock: '#8a949c', mist: '255,255,255', leaf: ['#6cb672', '#9fd07a', '#4f9a5c'] },
+      night: { sky: ['#0a1430', '#172a55', '#1f3a66'], far: ['#122630', '#173040', '#1d3a4a'], cliff: '#2b3448', cliffShade: '#222a3c', cliffHi: '#3c4764', fall: ['#b9c9ef', '#6f86c0'], pond: ['#2a3f72', '#152245'], tree: ['#0b181d', '#112328', '#183134'], trunk: '#120e14', bush: ['#0f2226', '#15302f', '#1d3e38'], rock: '#2c3343', mist: '170,190,240', leaf: ['#2a4a40', '#38604f', '#1f3a33'] }
+    };
+    let S;
+    const fx0 = () => W * 0.455, fx1 = () => W * 0.545, top = () => H * 0.2, pondY = () => H * 0.64;
+    function build() {
+      const P = PAL[mode], s = Math.max(0.8, S0()), [back, b] = canvas();
+      skyGrad(b, P.sky, H * 0.6);
+      if (mode === 'night') { b.fillStyle = '#fff'; const r = rng(4); for (let i = 0; i < 70; i++) { b.globalAlpha = r(); b.beginPath(); b.arc(r() * W, r() * H * 0.4, r() * 1.2 + 0.3, 0, 7); b.fill(); } b.globalAlpha = 1; }
+      for (let x = -40, i = 0; x < W + 60; x += 50 * s, i++) blob(b, x, H * 0.5 + Math.sin(i * 1.3) * H * 0.03, 60 * s, P.far, 100 + i);
+      // cliff
+      const r = rng(17), cl = [[W * 0.3, pondY() + 4], [W * 0.33, H * 0.42], [W * 0.37, H * 0.28], [W * 0.41, H * 0.17], [W * 0.5, H * 0.15], [W * 0.59, H * 0.17], [W * 0.63, H * 0.29], [W * 0.67, H * 0.43], [W * 0.7, pondY() + 4]];
+      b.fillStyle = P.cliff; b.beginPath(); cl.forEach(([x, y], i) => i ? b.lineTo(x + (r() - .5) * 10, y) : b.moveTo(x, y)); b.closePath(); b.fill();
+      b.fillStyle = P.cliffShade; b.beginPath(); b.moveTo(W * 0.55, H * 0.16); b.lineTo(W * 0.63, H * 0.29); b.lineTo(W * 0.7, pondY() + 4); b.lineTo(W * 0.56, pondY() + 4); b.fill();
+      b.strokeStyle = P.cliffHi; b.lineWidth = 2;
+      for (let i = 0; i < 14; i++) { const y = H * 0.22 + r() * H * 0.38, x = W * (0.34 + r() * 0.3); if (x > fx0() - 10 && x < fx1() + 10) continue; b.beginPath(); b.moveTo(x, y); b.lineTo(x + 15 + r() * 30, y + (r() - .5) * 4); b.stroke(); }
+      for (let i = 0; i < 6; i++) blob(b, W * (0.36 + (i % 3) * 0.12 + (i > 2 ? 0.04 : 0)), H * (0.16 + (i > 2 ? 0.05 : 0)), 22 * s, P.bush, 300 + i);
+      const fg = b.createLinearGradient(0, top(), 0, pondY()); fg.addColorStop(0, P.fall[0]); fg.addColorStop(1, P.fall[1]);
+      b.fillStyle = fg; b.fillRect(fx0(), top(), fx1() - fx0(), pondY() - top());
+      const pg = b.createLinearGradient(0, pondY(), 0, H); pg.addColorStop(0, P.pond[0]); pg.addColorStop(1, P.pond[1]);
+      b.fillStyle = pg; b.fillRect(0, pondY(), W, H - pondY());
+      // front: framing trees, bushes and rocks
+      const [front, f] = canvas();
+      f.fillStyle = P.trunk;
+      f.fillRect(W * 0.07, H * 0.15, 26 * s, H); f.fillRect(W * 0.9, H * 0.12, 24 * s, H); f.fillRect(W * 0.2, H * 0.3, 14 * s, H);
+      for (const [x, y, rad, sd] of [[W * 0.04, H * 0.08, 170, 1], [W * 0.17, H * 0.02, 120, 2], [W * 0.2, H * 0.27, 70, 3], [W * 0.95, H * 0.06, 170, 4], [W * 0.82, H * 0.0, 120, 5], [W * 0.86, H * 0.25, 70, 6]]) blob(f, x, y, rad * s, P.tree, sd);
+      for (let x = -20, i = 0; x < W + 40; x += 34 * s, i++) { if (x > W * 0.33 && x < W * 0.67) continue; blob(f, x, H * 0.93 + Math.sin(i) * H * 0.02, 46 * s, P.bush, 500 + i); }
+      f.fillStyle = P.rock;
+      for (const [x, y, w] of [[0.4, 0.95, 60], [0.48, 0.98, 80], [0.6, 0.96, 55], [0.36, 0.9, 30], [0.63, 0.91, 34]]) { f.beginPath(); f.ellipse(W * x, H * y, w * s, w * s * 0.45, 0, 0, 7); f.fill(); }
+      const streaks = Array.from({ length: Math.round(60 * (W / 1200) + 20) }, () => ({ x: rand(fx0(), fx1()), off: Math.random() * H, len: rand(30, 80), sp: rand(220, 340), w: rand(1, 2.5) }));
+      const butterflies = mode === 'day' ? Array.from({ length: 4 }, () => ({ x: Math.random() * W, y: rand(H * 0.55, H * 0.85), ph: Math.random() * 6, c: pick(['#ffd34f', '#ffffff', '#ff9ec7', '#9ad8ff']) })) : [];
+      const leaves = Array.from({ length: mode === 'day' ? 14 : 6 }, () => ({ x: Math.random() * W, y: Math.random() * H, vx: rand(8, 20), vy: rand(15, 30), rot: rand(0, 6), spin: rand(-2, 2), c: pick(P.leaf), s: rand(3, 6) }));
+      S = { back, front, streaks, butterflies, leaves, flies: mode === 'night' ? makeFlies(40, H * 0.4, H * 0.95) : [] };
+    }
+    function frame(dt) {
+      const P = PAL[mode], fallH = pondY() - top();
+      ctx.drawImage(S.back, 0, 0, W, H);
+      ctx.save(); ctx.beginPath(); ctx.rect(fx0(), top(), fx1() - fx0(), fallH); ctx.clip(); ctx.fillStyle = '#fff';
+      for (const s of S.streaks) { const y = top() + ((s.off + t * s.sp) % (fallH + s.len)) - s.len; ctx.globalAlpha = 0.55; ctx.fillRect(s.x, y, s.w, s.len); }
+      ctx.restore(); ctx.globalAlpha = 1;
+      const cx = W * 0.5, py = pondY();
+      for (let i = 0; i < 5; i++) {
+        const rx = (t * 22 + i * 36) % 180, a = 1 - rx / 180;
+        ctx.strokeStyle = `rgba(${P.mist},${0.5 * a})`; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.ellipse(cx, py + H * 0.05, rx * Math.max(1, W / 1200) + 20, (rx + 20) * 0.22, 0, 0, 7); ctx.stroke();
+      }
+      for (let i = 0; i < 9; i++) {
+        const x = cx + Math.sin(t * 0.7 + i * 2.1) * W * 0.06, y = py - 6 + Math.cos(t * 0.9 + i) * 8, r = 30 + 12 * Math.sin(t + i);
+        const gr = ctx.createRadialGradient(x, y, 0, x, y, r); gr.addColorStop(0, `rgba(${P.mist},.32)`); gr.addColorStop(1, `rgba(${P.mist},0)`);
+        ctx.fillStyle = gr; ctx.fillRect(x - r, y - r, r * 2, r * 2);
+      }
+      shimmer(py + 10, H * 0.9, W * 0.25, W * 0.75, 26, mode === 'day' ? 'rgba(255,255,255,.6)' : 'rgba(190,205,255,.35)', 0.5);
+      if (mode === 'day') {
+        ctx.save(); ctx.globalCompositeOperation = 'lighter';
+        for (let i = 0; i < 4; i++) {
+          const x0 = W * (0.3 + i * 0.13) + Math.sin(t * 0.2 + i) * 12, w = 50 + i * 15;
+          const gr = ctx.createLinearGradient(0, 0, 0, H * 0.9); gr.addColorStop(0, 'rgba(255,250,215,.16)'); gr.addColorStop(1, 'rgba(255,250,215,0)');
+          ctx.globalAlpha = 0.6 + 0.4 * Math.sin(t * 0.5 + i * 1.7); ctx.fillStyle = gr; ctx.beginPath();
+          ctx.moveTo(x0, 0); ctx.lineTo(x0 + w, 0); ctx.lineTo(x0 + w - H * 0.35, H * 0.9); ctx.lineTo(x0 - H * 0.35, H * 0.9); ctx.fill();
+        }
+        ctx.restore(); ctx.globalAlpha = 1;
+      }
+      ctx.drawImage(S.front, 0, 0, W, H);
+      for (const l of S.leaves) {
+        l.x += (l.vx + Math.sin(t + l.rot) * 10) * dt; l.y += l.vy * dt; l.rot += l.spin * dt;
+        if (l.y > H + 10 || l.x > W + 10) { l.x = rand(-20, W); l.y = -10; }
+        ctx.save(); ctx.translate(l.x, l.y); ctx.rotate(l.rot); ctx.fillStyle = l.c; ctx.beginPath(); ctx.ellipse(0, 0, l.s, l.s * 0.45, 0, 0, 7); ctx.fill(); ctx.restore();
+      }
+      for (const b of S.butterflies) {
+        b.x += Math.cos(t * 0.5 + b.ph) * 30 * dt + 6 * dt; b.y += Math.sin(t * 0.9 + b.ph * 2) * 20 * dt;
+        if (b.x > W + 10) b.x = -10;
+        const flap = Math.abs(Math.sin(t * 11 + b.ph)), sz = 5 * Math.max(0.8, S0());
+        ctx.fillStyle = b.c;
+        ctx.beginPath(); ctx.ellipse(b.x - sz * flap * 0.7, b.y, sz * flap, sz, -0.4, 0, 7); ctx.ellipse(b.x + sz * flap * 0.7, b.y, sz * flap, sz, 0.4, 0, 7); ctx.fill();
+      }
+      drawFlies(S.flies, dt);
+    }
+    return { build, frame };
+  }
+
+  // ---------- City skyline ----------
+  function city() {
+    const PAL = {
+      day: { sky: ['#4f97dc', '#9fcdf0', '#e4f0f8'], sun: '#fff8e6', glow: 'rgba(255,245,215,', bld: ['#b3c6de', '#8aa3c6', '#5f7da6'], win: ['rgba(235,245,255,.6)'], water: ['#8cbadf', '#3f6f9c'], bridge: '#2f405a', cable: '#4b5d7a', cloud: ['#ffffff', '#dbe6f5'], bird: '#2d3a50', shim: 'rgba(255,255,255,.55)', cars: ['#e8463b', '#f2f2f2', '#3a7bd5', '#f6c344', '#2d2d2d'] },
+      night: { sky: ['#050a1d', '#121c45', '#3a2b62'], sun: '#eef0ff', glow: 'rgba(200,215,255,', bld: ['#1f2650', '#171d3d', '#0e1329'], win: ['#ffd27a', '#ffe7ad', '#a8dcff', '#ffd27a'], water: ['#1a2350', '#080c26'], bridge: '#070a18', cable: '#1a2140', cloud: ['#363a70', '#232755'], bird: '#000', shim: 'rgba(255,210,130,.55)' }
+    };
+    let S;
+    const hz = () => H * 0.66, deckY = () => H * 0.84;
+    function build() {
+      const P = PAL[mode], h = hz(), s = Math.max(0.7, S0()), [sky, g] = canvas();
+      skyGrad(g, P.sky, h);
+      if (mode === 'day') disc(g, W * 0.8, H * 0.18, Math.min(W, H) * 0.045, P.sun, P.glow);
+      else disc(g, W * 0.15, H * 0.14, Math.min(W, H) * 0.035, P.sun, P.glow, P.sky[1]);
+      const [sk, k] = canvas(), tw = [], beacons = [];
+      const ranges = [[0.18, 0.46], [0.1, 0.3], [0.04, 0.16]];
+      ranges.forEach(([lo, hi], li) => {
+        let x = -10;
+        while (x < W + 10) {
+          const w = rand(22, 60) * s * (li === 2 ? 1.4 : 1), tall = Math.random() < 0.12, bh = H * rand(lo, hi) * (tall ? 1.35 : 1), y = h - bh;
+          k.fillStyle = P.bld[li]; k.fillRect(x, y, w, bh + 2);
+          const top = Math.random();
+          if (top < 0.25) k.fillRect(x + w * 0.2, y - bh * 0.06, w * 0.6, bh * 0.06);
+          else if (top < 0.4) { k.beginPath(); k.moveTo(x, y); k.lineTo(x + w / 2, y - w * 0.5); k.lineTo(x + w, y); k.fill(); }
+          if (tall || top > 0.85) { k.fillRect(x + w / 2 - 1, y - bh * 0.12, 2, bh * 0.12); beacons.push({ x: x + w / 2, y: y - bh * 0.12, ph: Math.random() * 6 }); }
+          if (li > 0 || mode === 'night') {
+            const cw = li === 0 ? 5 : 7, chh = li === 0 ? 7 : 9;
+            for (let wx = x + 4; wx < x + w - 5; wx += cw) for (let wy = y + 6; wy < h - 4; wy += chh) {
+              if (mode === 'night') {
+                const rv = Math.random();
+                if (rv < 0.3) { k.fillStyle = pick(P.win); k.globalAlpha = 0.5 + Math.random() * 0.5; k.fillRect(wx, wy, cw - 3, chh - 4); }
+                else if (rv < 0.31 && tw.length < 120) tw.push({ x: wx, y: wy, w: cw - 3, h: chh - 4, c: pick(P.win), ph: Math.random() * 6, sp: rand(0.1, 0.4) });
+              } else if ((Math.floor(wy / chh) + li) % 3 !== 0) { k.fillStyle = P.win[0]; k.globalAlpha = 0.35; k.fillRect(wx, wy, cw - 3, chh - 4); }
+            }
+            k.globalAlpha = 1;
+          }
+          x += w + rand(0, 6) * s;
+        }
+      });
+      const [back, b] = canvas();
+      b.drawImage(sk, 0, 0, W, H);
+      const wg = b.createLinearGradient(0, h, 0, H); wg.addColorStop(0, P.water[0]); wg.addColorStop(1, P.water[1]);
+      b.fillStyle = wg; b.fillRect(0, h, W, H - h);
+      b.save(); b.beginPath(); b.rect(0, h, W, H - h); b.clip(); b.globalAlpha = mode === 'night' ? 0.4 : 0.25;
+      b.translate(0, h); b.scale(1, -0.6); b.translate(0, -h); b.drawImage(sk, 0, 0, W, H); b.restore();
+      // bridge
+      const [front, f] = canvas(), d = deckY(), t1 = W * 0.22, t2 = W * 0.78, topY = d - H * 0.3, low = d - H * 0.03;
+      f.fillStyle = P.bridge; f.fillRect(t1 - 7 * s, topY, 14 * s, H - topY); f.fillRect(t2 - 7 * s, topY, 14 * s, H - topY);
+      f.fillRect(0, d, W, H * 0.022); f.fillRect(0, d - 4, W, 2);
+      const cableY = x => x < t1 ? topY + (d - H * 0.06 - topY) * (1 - x / t1) ** 2 : x > t2 ? topY + (d - H * 0.06 - topY) * ((x - t2) / (W - t2)) ** 2 : low - (low - topY) * ((x - W / 2) / ((t2 - t1) / 2)) ** 2;
+      f.strokeStyle = P.cable; f.lineWidth = 3; f.beginPath(); for (let x = 0; x <= W; x += 4) x ? f.lineTo(x, cableY(x)) : f.moveTo(x, cableY(x)); f.stroke();
+      f.lineWidth = 1; f.beginPath(); for (let x = 6; x < W; x += 14) { f.moveTo(x, cableY(x)); f.lineTo(x, d); } f.stroke();
+      const lights = [];
+      if (mode === 'night') for (let x = 10; x < W; x += 30) lights.push(x);
+      const cars = Array.from({ length: Math.round(W / 70) }, () => ({ x: Math.random() * W, dir: Math.random() < 0.5 ? 1 : -1, sp: rand(60, 110), c: mode === 'day' ? pick(P.cars) : null }));
+      const plane = { x: -50, y: H * 0.12 };
+      S = { sky, back, front, tw, beacons, lights, cars, plane, clouds: makeClouds(P.cloud, H * 0.03, H * 0.18, mode === 'day' ? 0.9 : 0.6), stars: mode === 'night' ? makeStars(90, h * 0.6) : [], birds: mode === 'day' ? makeBirds(5, H * 0.1, H * 0.3) : [] };
+    }
+    function frame(dt) {
+      const P = PAL[mode], h = hz(), d = deckY(), s = Math.max(0.7, S0());
+      ctx.drawImage(S.sky, 0, 0, W, H); drawStars(S.stars); drawClouds(S.clouds, dt);
+      if (mode === 'night') {
+        const pl = S.plane; pl.x += 22 * dt; if (pl.x > W + 50) { pl.x = -50; pl.y = rand(H * 0.06, H * 0.2); }
+        ctx.fillStyle = Math.sin(t * 5) > 0.6 ? '#ff5050' : '#ffffff'; ctx.beginPath(); ctx.arc(pl.x, pl.y, 1.8, 0, 7); ctx.fill();
+      }
+      ctx.drawImage(S.back, 0, 0, W, H);
+      for (const w of S.tw) if (Math.sin(t * w.sp + w.ph) > -0.2) { ctx.fillStyle = w.c; ctx.globalAlpha = 0.85; ctx.fillRect(w.x, w.y, w.w, w.h); }
+      ctx.globalAlpha = 1;
+      for (const bc of S.beacons) if (Math.sin(t * 2.5 + bc.ph) > 0.4) {
+        const gr = ctx.createRadialGradient(bc.x, bc.y, 0, bc.x, bc.y, 7); gr.addColorStop(0, 'rgba(255,60,60,.95)'); gr.addColorStop(1, 'rgba(255,60,60,0)');
+        ctx.fillStyle = gr; ctx.fillRect(bc.x - 7, bc.y - 7, 14, 14);
+      }
+      shimmer(h + 4, d - 6, 0, W, 60, P.shim, 0.7);
+      ctx.drawImage(S.front, 0, 0, W, H);
+      for (const x of S.lights) { ctx.fillStyle = 'rgba(255,215,140,.9)'; ctx.fillRect(x, d - 7, 2, 3); }
+      for (const c of S.cars) {
+        c.x += c.dir * c.sp * dt; if (c.x > W + 20) c.x = -20; if (c.x < -20) c.x = W + 20;
+        const y = c.dir > 0 ? d + 2 : d + H * 0.012;
+        if (mode === 'day') { ctx.fillStyle = c.c; rr(ctx, c.x, y, 12 * s, 5 * s, 2); ctx.fill(); }
+        else { ctx.fillStyle = c.dir > 0 ? 'rgba(255,250,220,.95)' : 'rgba(255,70,70,.95)'; ctx.fillRect(c.x, y + 1, 10 * s, 2); ctx.fillStyle = c.dir > 0 ? 'rgba(255,250,220,.25)' : 'rgba(255,70,70,.25)'; ctx.fillRect(c.x - c.dir * 14 * s, y + 1, 14 * s, 2); }
+      }
+      drawBirds(S.birds, dt, P.bird);
+    }
+    return { build, frame };
+  }
+
+  // ---------- Tokyo dusk ----------
+  function tokyo() {
+    const PAL = {
+      day: { sky: ['#6f86cf', '#e9a0a6', '#ffd6a0'], sun: '#ffe6b0', glow: 'rgba(255,200,140,', far: '#c88e9c', mid: '#9b6d88', near: '#5c4664', tower: '#e9573f', towerW: '#f5efe6', track: '#3b2f45', pole: '#2a2032', train: '#eef1f5', stripe: '#2fa05a', trainWin: '#8fb1c9', cloud: ['#ffe6d8', '#f0b2aa'], bird: '#2a2032', neonA: 0.35, win: ['rgba(255,230,190,.5)'] },
+      night: { sky: ['#080c26', '#221a4a', '#552c5d'], sun: '#f4f1e2', glow: 'rgba(255,200,220,', far: '#1e1840', mid: '#151032', near: '#0c0a1e', tower: '#ff7a3d', towerW: '#ffd2a8', track: '#0a0816', pole: '#05040c', train: '#c9ced8', stripe: '#2fa05a', trainWin: '#ffe2a0', cloud: ['#3a2e66', '#2a2250'], bird: '#000', neonA: 1, win: ['#ffd27a', '#ffe7ad', '#a8dcff'] }
+    };
+    const NEON = ['#ff4fa3', '#4fd8ff', '#ffd84f', '#7dff6a', '#b06bff'];
+    let S;
+    const hz = () => H * 0.74, deck = () => H * 0.745;
+    function skyline(g, lo, hi, col, wmin, wmax, wins, P, neon) {
+      let x = -10; const s = Math.max(0.7, S0());
+      while (x < W + 10) {
+        const w = rand(wmin, wmax) * s, bh = H * rand(lo, hi), y = hz() - bh;
+        g.fillStyle = col; g.fillRect(x, y, w, bh + 2);
+        if (Math.random() < 0.3) g.fillRect(x + w * 0.3, y - 8 * s, w * 0.4, 8 * s);
+        if (wins) for (let wx = x + 3; wx < x + w - 4; wx += 6) for (let wy = y + 5; wy < hz() - 3; wy += 8)
+          if (Math.random() < (mode === 'night' ? 0.28 : 0.12)) { g.fillStyle = pick(P.win); g.globalAlpha = 0.4 + Math.random() * 0.5; g.fillRect(wx, wy, 3, 4); g.globalAlpha = 1; }
+        if (neon && Math.random() < 0.55) {
+          const vert = Math.random() < 0.6, nw = vert ? rand(8, 12) * s : rand(24, 40) * s, nh = vert ? rand(30, 60) * s : rand(9, 13) * s;
+          neon.push({ x: x + (vert ? (Math.random() < 0.5 ? 2 : w - nw - 2) : (w - nw) / 2), y: y + rand(6, Math.max(8, bh * 0.5)), w: nw, h: nh, c: pick(NEON), ph: Math.random() * 6, vert });
+        }
+        x += w + rand(0, 4) * s;
+      }
+    }
+    function tower(g, P) {
+      const tx = W * 0.68, base = hz() - H * 0.02, Ht = H * 0.5, hw = f => Ht * 0.15 * (1 - f) ** 1.7 + Ht * 0.008;
+      const edge = (f, side) => [tx + side * hw(f), base - f * Ht * 0.82];
+      const poly = (f0, f1, col) => {
+        g.fillStyle = col; g.beginPath();
+        for (let f = f0; f <= f1 + 1e-6; f += 0.02) { const [x, y] = edge(Math.min(f, f1), -1); f === f0 ? g.moveTo(x, y) : g.lineTo(x, y); }
+        for (let f = f1; f >= f0 - 1e-6; f -= 0.02) { const [x, y] = edge(Math.max(f, f0), 1); g.lineTo(x, y); }
+        g.closePath(); g.fill();
+      };
+      if (mode === 'night') { const gl = g.createRadialGradient(tx, base - Ht * 0.45, 0, tx, base - Ht * 0.45, Ht * 0.6); gl.addColorStop(0, 'rgba(255,140,60,.25)'); gl.addColorStop(1, 'rgba(255,140,60,0)'); g.fillStyle = gl; g.fillRect(tx - Ht * 0.6, base - Ht * 1.05, Ht * 1.2, Ht * 1.2); }
+      poly(0, 1, P.tower);
+      for (const [a, b] of [[0.3, 0.35], [0.52, 0.56], [0.68, 0.71], [0.8, 0.83], [0.9, 0.92]]) poly(a, b, P.towerW);
+      g.strokeStyle = 'rgba(0,0,0,.25)'; g.lineWidth = 1;
+      for (let f = 0.02; f < 0.95; f += 0.045) { const [ax, ay] = edge(f, -1), [bx, by] = edge(f + 0.045, 1), [cx, cy] = edge(f, 1), [dx, dy] = edge(f + 0.045, -1); g.beginPath(); g.moveTo(ax, ay); g.lineTo(bx, by); g.moveTo(cx, cy); g.lineTo(dx, dy); g.stroke(); }
+      for (const [f, extra, hgt] of [[0.42, 0.035, 0.035], [0.74, 0.02, 0.025]]) {
+        const [x0, y0] = edge(f, -1), w = 2 * hw(f) + Ht * extra * 2;
+        g.fillStyle = P.towerW; g.fillRect(x0 - Ht * extra, y0 - Ht * hgt, w, Ht * hgt);
+        g.fillStyle = mode === 'night' ? '#ffe6b0' : P.tower; g.fillRect(x0 - Ht * extra, y0 - Ht * hgt * 0.55, w, Ht * hgt * 0.25);
+      }
+      g.fillStyle = P.tower; g.fillRect(tx - 2, base - Ht, 4, Ht * 0.2);
+      return { x: tx, y: base - Ht };
+    }
+    function build() {
+      const P = PAL[mode], [sky, g] = canvas(), s = Math.max(0.7, S0());
+      skyGrad(g, P.sky, hz());
+      if (mode === 'day') disc(g, W * 0.3, H * 0.6, Math.min(W, H) * 0.07, P.sun, P.glow);
+      else disc(g, W * 0.18, H * 0.15, Math.min(W, H) * 0.035, P.sun, P.glow, P.sky[1]);
+      const [back, b] = canvas(), neon = [];
+      skyline(b, 0.14, 0.32, P.far, 18, 40, false, P);
+      const top = tower(b, P);
+      skyline(b, 0.07, 0.18, P.mid, 30, 70, true, P);
+      skyline(b, 0.03, 0.1, P.near, 40, 90, true, P, neon);
+      const [front, f] = canvas(), dk = deck();
+      f.fillStyle = P.track; f.fillRect(0, dk, W, H * 0.03); f.fillRect(0, dk - 3, W, 2);
+      f.fillRect(0, dk + H * 0.03, W, H);
+      for (let x = W * 0.06; x < W; x += W * 0.16) f.fillRect(x, dk, 16 * s, H);
+      f.strokeStyle = P.pole; f.fillStyle = P.pole;
+      const poles = [W * 0.1, W * 0.88], arms = [H * 0.16, H * 0.22];
+      for (const px of poles) { f.fillRect(px - 5 * s, H * 0.1, 10 * s, H); for (const ay of arms) f.fillRect(px - 40 * s, ay, 80 * s, 5 * s); f.fillRect(px + 6 * s, H * 0.27, 18 * s, 26 * s); }
+      f.lineWidth = 1.4;
+      for (const ay of arms) for (const dx of [-36, 36]) {
+        const y = ay + 2, sag = H * 0.06;
+        f.beginPath(); f.moveTo(poles[0] + dx * s, y); f.quadraticCurveTo((poles[0] + poles[1]) / 2, y + sag * 2, poles[1] + dx * s, y); f.stroke();
+        f.beginPath(); f.moveTo(-10, y + sag * 0.6); f.quadraticCurveTo(poles[0] / 2, y + sag * 0.5, poles[0] + dx * s, y); f.stroke();
+        f.beginPath(); f.moveTo(poles[1] + dx * s, y); f.quadraticCurveTo((poles[1] + W) / 2, y + sag * 0.5, W + 10, y + sag * 0.6); f.stroke();
+      }
+      S = { sky, back, front, neon, top, train: { x: W * 0.6, wait: 0 }, clouds: makeClouds(P.cloud, H * 0.04, H * 0.25, mode === 'day' ? 0.85 : 0.6), stars: mode === 'night' ? makeStars(80, H * 0.45) : [], birds: mode === 'day' ? makeBirds(5, H * 0.12, H * 0.35) : [] };
+    }
+    function drawTrain(P, dt) {
+      const tr = S.train, s = Math.max(0.7, S0()), carW = Math.max(90, W * 0.09), carH = Math.max(22, H * 0.035), n = 6, len = n * (carW + 4);
+      if (tr.wait > 0) { tr.wait -= dt; return; }
+      tr.x -= W * 0.2 * dt;
+      if (tr.x < -len - 40) { tr.x = W + 40; tr.wait = rand(5, 9); return; }
+      const y = deck() - carH - 3;
+      for (let i = 0; i < n; i++) {
+        const x = tr.x + i * (carW + 4);
+        if (x > W + 10 || x + carW < -10) continue;
+        ctx.fillStyle = P.train; rr(ctx, x, y, carW, carH, i === 0 ? carH * 0.45 : 4); ctx.fill();
+        ctx.fillStyle = P.stripe; ctx.fillRect(x + (i === 0 ? carH * 0.3 : 0), y + carH * 0.68, carW - (i === 0 ? carH * 0.3 : 0), carH * 0.14);
+        if (mode === 'night') { ctx.shadowColor = P.trainWin; ctx.shadowBlur = 8; }
+        ctx.fillStyle = P.trainWin;
+        for (let wx = x + 10 * s; wx < x + carW - 10 * s; wx += 14 * s) ctx.fillRect(wx, y + carH * 0.2, 9 * s, carH * 0.32);
+        ctx.shadowBlur = 0;
+      }
+    }
+    function frame(dt) {
+      const P = PAL[mode];
+      ctx.drawImage(S.sky, 0, 0, W, H); drawStars(S.stars); drawClouds(S.clouds, dt);
+      ctx.drawImage(S.back, 0, 0, W, H);
+      if (Math.sin(t * 2.2) > 0.3) { const gr = ctx.createRadialGradient(S.top.x, S.top.y, 0, S.top.x, S.top.y, 8); gr.addColorStop(0, 'rgba(255,60,60,.95)'); gr.addColorStop(1, 'rgba(255,60,60,0)'); ctx.fillStyle = gr; ctx.fillRect(S.top.x - 8, S.top.y - 8, 16, 16); }
+      for (const n of S.neon) {
+        const flick = Math.sin(t * 13 + n.ph * 7) > 0.97 ? 0.3 : 1;
+        ctx.globalAlpha = P.neonA * (0.75 + 0.25 * Math.sin(t * 2 + n.ph)) * flick;
+        if (mode === 'night') { ctx.shadowColor = n.c; ctx.shadowBlur = 14; }
+        ctx.fillStyle = n.c; ctx.fillRect(n.x, n.y, n.w, n.h); ctx.shadowBlur = 0;
+        ctx.fillStyle = 'rgba(0,0,0,.35)';
+        if (n.vert) for (let y = n.y + 4; y < n.y + n.h - 6; y += 10) ctx.fillRect(n.x + 2, y, n.w - 4, 5);
+        else for (let x = n.x + 3; x < n.x + n.w - 5; x += 8) ctx.fillRect(x, n.y + 3, 5, n.h - 6);
+      }
+      ctx.globalAlpha = 1;
+      drawTrain(P, dt);
+      ctx.drawImage(S.front, 0, 0, W, H);
+      drawBirds(S.birds, dt, P.bird);
+    }
+    return { build, frame };
+  }
+
+  // ---------- scene switching ----------
+  const LIST = [['sakura', 'Sakura hills', sakura], ['ocean', 'Ocean shore', ocean], ['mountains', 'Mountain valley', mountains], ['forest', 'Forest waterfall', forest], ['city', 'City skyline', city], ['tokyo', 'Tokyo dusk', tokyo], ['off', 'Off', null]];
+  const R = {};
+  for (const [id, name, make] of LIST) {
+    if (make) R[id] = make();
+    const o = document.createElement('option'); o.value = id; o.textContent = name; sel.appendChild(o);
+  }
   let scene = 'sakura';
   try {
     const saved = localStorage.getItem('cube-timer-scene');
     if (saved) scene = saved; else if (localStorage.getItem('cube-timer-scenery') === 'off') scene = 'off';
   } catch (e) {}
-  if (!SCENES.some(s => s.id === scene)) scene = 'sakura';
-  for (const s of SCENES) { const o = document.createElement('option'); o.value = s.id; o.textContent = s.name; sel.appendChild(o); }
-  const esc = x => String(x).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  if (!LIST.some(l => l[0] === scene)) scene = 'sakura';
 
-  let W = 0, H = 0, dpr = 1, mode = 'day', sky, back, front, clouds = [], blades = [], petals = [], flies = [], stars = [];
-  let raf = 0, last = 0, t = 0;
-
-  const rng = seed => () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let x = Math.imul(seed ^ seed >>> 15, 1 | seed); x = x + Math.imul(x ^ x >>> 7, 61 | x) ^ x; return ((x ^ x >>> 14) >>> 0) / 4294967296; };
-  const R = rng(7);
-  const rand = (a, b) => a + Math.random() * (b - a);
-
-  const PAL = {
-    day: {
-      sky: ['#5aa6e6', '#9fd0f2', '#ffe7c4'], sun: '#fff6dc', glow: 'rgba(255,236,190,', mtnFar: '#a9c3e3', mtnNear: '#86a7d4',
-      water: ['#bfe0f5', '#7fb3dd'], hillBack: '#8fcb6e', hillFront: '#64ab4c', hillShade: '#4f9440',
-      grass: ['#5fa845', '#74bb55', '#4c9139', '#86c862'], cloud: ['#ffffff', '#dfe9f8'], trunk: '#6b4a3a',
-      bloom: ['#f9c2d2', '#f5a3bb', '#fde0e8', '#f08fac'], petal: ['#f8b7ca', '#fcd5e0', '#f39bb6'], flower: ['#ffffff', '#ffe27a', '#ffd1e0']
-    },
-    night: {
-      sky: ['#0d1638', '#2b3270', '#d98a86'], sun: '#f4f1e2', glow: 'rgba(220,225,255,', mtnFar: '#3a3f7a', mtnNear: '#272c5e',
-      water: ['#3c3f78', '#161c44'], hillBack: '#1f3d3c', hillFront: '#16302e', hillShade: '#10241f',
-      grass: ['#1e4a3c', '#285a47', '#173b31', '#2f6650'], cloud: ['#5a5d98', '#33386e'], trunk: '#2a1c22',
-      bloom: ['#b9789a', '#9b5f84', '#d495b0', '#8a4f74'], petal: ['#c98aa8', '#e2aec4', '#a96d90'], flower: ['#d9d6ff', '#fff2a8', '#e6b3cc']
-    }
-  };
-
-  // terrain shapes (fractions of the screen)
-  const horizon = () => H * 0.6;
-  const backHillY = x => H * 0.8 - Math.sin(x / W * Math.PI * 1.3 + 0.6) * H * 0.045;
-  const frontHillY = x => H * 0.88 - Math.exp(-((((x / W) - 0.13) / 0.2) ** 2)) * H * 0.16 - Math.sin(x / W * 7) * H * 0.008;
-  const treeX = () => W * 0.13, treeBase = () => frontHillY(treeX());
-
-  function canvas(w, h) { const c = document.createElement('canvas'); c.width = Math.ceil(w * dpr); c.height = Math.ceil(h * dpr); const g = c.getContext('2d'); g.scale(dpr, dpr); return [c, g]; }
-
-  function ridge(g, base, amp, color, seed, rough) {
-    const r = rng(seed), ph = [r() * 6, r() * 6, r() * 6, r() * 6];
-    g.fillStyle = color; g.beginPath(); g.moveTo(0, H);
-    for (let x = 0; x <= W + 4; x += 4) {
-      const u = x / W;
-      const h = 0.55 + 0.25 * Math.sin(u * 3.1 + ph[0]) + 0.13 * Math.sin(u * 7.3 + ph[1]) + rough * (0.06 * Math.sin(u * 19 + ph[2]) + 0.03 * Math.sin(u * 41 + ph[3]));
-      g.lineTo(x, base - Math.max(0.05, h) * amp);
-    }
-    g.lineTo(W, H); g.closePath(); g.fill();
+  function paint(dt) {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over'; ctx.shadowBlur = 0;
+    cur.frame(dt);
   }
-
-  function buildSky(P) {
-    const [c, g] = canvas(W, H), hz = horizon();
-    const gr = g.createLinearGradient(0, 0, 0, hz);
-    gr.addColorStop(0, P.sky[0]); gr.addColorStop(0.55, P.sky[1]); gr.addColorStop(1, P.sky[2]);
-    g.fillStyle = gr; g.fillRect(0, 0, W, hz + 2);
-    const s = sunPos(), rad = Math.min(W, H) * (mode === 'day' ? 0.055 : 0.045);
-    const glow = g.createRadialGradient(s.x, s.y, rad * 0.5, s.x, s.y, rad * 6);
-    glow.addColorStop(0, P.glow + '0.55)'); glow.addColorStop(1, P.glow + '0)');
-    g.fillStyle = glow; g.fillRect(0, 0, W, hz);
-    g.fillStyle = P.sun; g.beginPath(); g.arc(s.x, s.y, rad, 0, 7); g.fill();
-    if (mode === 'night') { // crescent shading
-      g.fillStyle = 'rgba(43,50,112,.85)'; g.beginPath(); g.arc(s.x + rad * 0.45, s.y - rad * 0.2, rad * 0.9, 0, 7); g.fill();
-    }
-    return c;
-  }
-  const sunPos = () => mode === 'day' ? { x: W * 0.7, y: horizon() - H * 0.13 } : { x: W * 0.8, y: H * 0.16 };
-
-  function buildBack(P) {
-    const [c, g] = canvas(W, H), hz = horizon();
-    ridge(g, hz + 2, H * 0.24, P.mtnFar, 11, 1);
-    // snowy caps on far range (day) / moonlit rims (night)
-    ridge(g, hz + 2, H * 0.15, P.mtnNear, 23, 0.6);
-    const wg = g.createLinearGradient(0, hz, 0, H);
-    wg.addColorStop(0, P.water[0]); wg.addColorStop(1, P.water[1]);
-    g.fillStyle = wg; g.fillRect(0, hz, W, H - hz);
-    // soft haze on the horizon line
-    const hg = g.createLinearGradient(0, hz - H * 0.05, 0, hz + H * 0.02);
-    hg.addColorStop(0, 'rgba(255,255,255,0)'); hg.addColorStop(1, mode === 'day' ? 'rgba(255,255,255,.35)' : 'rgba(217,138,134,.25)');
-    g.fillStyle = hg; g.fillRect(0, hz - H * 0.05, W, H * 0.07);
-    return c;
-  }
-
-  function buildFront(P) {
-    const [c, g] = canvas(W, H), r = rng(5);
-    g.fillStyle = P.hillBack; g.beginPath(); g.moveTo(0, H);
-    for (let x = 0; x <= W + 4; x += 4) g.lineTo(x, backHillY(x));
-    g.lineTo(W, H); g.fill();
-    g.fillStyle = P.hillFront; g.beginPath(); g.moveTo(0, H);
-    for (let x = 0; x <= W + 4; x += 4) g.lineTo(x, frontHillY(x));
-    g.lineTo(W, H); g.fill();
-    // anime two-tone shadow band
-    g.fillStyle = P.hillShade; g.beginPath(); g.moveTo(0, H);
-    for (let x = 0; x <= W + 4; x += 4) g.lineTo(x, frontHillY(x) + H * 0.05 + Math.sin(x / 60) * 3);
-    g.lineTo(W, H); g.fill();
-    // little flowers
-    for (let i = 0; i < Math.round(W / 14); i++) {
-      const x = r() * W, onFront = r() < 0.6, y = (onFront ? frontHillY(x) : backHillY(x)) + 4 + r() * H * 0.08;
-      g.fillStyle = P.flower[Math.floor(r() * P.flower.length)]; g.globalAlpha = 0.85;
-      g.beginPath(); g.arc(x, y, 1.2 + r() * 1.4, 0, 7); g.fill();
-    }
-    g.globalAlpha = 1;
-    drawTree(g, P);
-    return c;
-  }
-
-  function drawTree(g, P) {
-    const x = treeX(), y = treeBase(), s = Math.min(W, H) / 700, r = rng(42);
-    g.strokeStyle = P.trunk; g.lineCap = 'round';
-    const branch = (x0, y0, ang, len, w, depth) => {
-      const x1 = x0 + Math.cos(ang) * len, y1 = y0 + Math.sin(ang) * len;
-      g.lineWidth = w; g.beginPath(); g.moveTo(x0, y0); g.quadraticCurveTo((x0 + x1) / 2 + (r() - .5) * len * .3, (y0 + y1) / 2, x1, y1); g.stroke();
-      if (depth > 0) {
-        branch(x1, y1, ang - 0.35 - r() * 0.3, len * 0.72, w * 0.62, depth - 1);
-        branch(x1, y1, ang + 0.3 + r() * 0.3, len * 0.7, w * 0.62, depth - 1);
-      } else blooms.push([x1, y1]);
-    };
-    const blooms = [];
-    branch(x, y + 4, -Math.PI / 2 - 0.05, 95 * s, 16 * s, 4);
-    // canopy: clusters of pink puffs, dark underside first for depth
-    for (const pass of [0, 1, 2]) for (const [bx, by] of blooms) {
-      for (let k = 0; k < 3; k++) {
-        const rr = (14 + r() * 16) * s, ox = (r() - .5) * 30 * s, oy = (r() - .5) * 24 * s + (pass === 0 ? 6 * s : pass === 2 ? -6 * s : 0);
-        g.fillStyle = P.bloom[pass === 0 ? 3 : pass === 1 ? Math.floor(r() * 2) : 2];
-        g.beginPath(); g.arc(bx + ox, by + oy, rr * (pass === 2 ? 0.55 : 1), 0, 7); g.fill();
-      }
-    }
-    tree = { x, y, top: Math.min(...blooms.map(b => b[1])), left: Math.min(...blooms.map(b => b[0])), right: Math.max(...blooms.map(b => b[0])) };
-  }
-  let tree = { x: 0, y: 0, top: 0, left: 0, right: 0 };
-
-  function makeCloud(P, scale) {
-    const w = 260 * scale, h = 110 * scale, [c, g] = canvas(w, h), r = Math.random;
-    const puffs = [];
-    for (let i = 0; i < 7; i++) {
-      const u = i / 6, rr = (26 + 22 * Math.sin(u * Math.PI) + r() * 10) * scale;
-      puffs.push([30 * scale + u * (w - 60 * scale), h - 22 * scale - Math.sin(u * Math.PI) * 30 * scale - r() * 8 * scale, rr]);
-    }
-    g.fillStyle = P.cloud[1];
-    for (const [x, y, rr] of puffs) { g.beginPath(); g.arc(x, y, rr, 0, 7); g.fill(); }
-    g.fillRect(30 * scale, h - 24 * scale, w - 60 * scale, 12 * scale);
-    g.fillStyle = P.cloud[0];
-    for (const [x, y, rr] of puffs) { g.beginPath(); g.arc(x - rr * 0.12, y - rr * 0.18, rr * 0.86, 0, 7); g.fill(); }
-    return { c, w, h };
-  }
-
-  function build() {
-    dpr = Math.min(window.devicePixelRatio || 1, 1.5);
-    W = innerWidth; H = innerHeight;
-    cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
-    mode = getComputedStyle(document.documentElement).getPropertyValue('--scene').trim() === 'day' ? 'day' : 'night';
-    const P = PAL[mode];
-    sky = buildSky(P); back = buildBack(P); front = buildFront(P);
-    clouds = [];
-    const n = Math.max(4, Math.round(W / 260));
-    for (let i = 0; i < n; i++) {
-      const depth = 0.5 + Math.random() * 0.7, cl = makeCloud(P, depth * Math.min(1.3, W / 1100 + 0.5));
-      clouds.push({ ...cl, x: Math.random() * (W + cl.w) - cl.w, y: H * (0.03 + Math.random() * 0.22), v: 6 + depth * 10, a: mode === 'day' ? 0.95 : 0.8 });
-    }
-    clouds.sort((a, b) => a.v - b.v);
-    blades = [];
-    const bc = Math.round(W / 4);
-    for (let i = 0; i < bc; i++) {
-      const x = Math.random() * W, onBack = Math.random() < 0.3;
-      blades.push({ x, y: (onBack ? backHillY(x) : frontHillY(x)) + 2 + Math.random() * 3, h: (onBack ? 6 : 10) + Math.random() * (onBack ? 8 : 16), c: P.grass[i % 4], ph: Math.random() * 6 });
-    }
-    petals = []; flies = []; stars = [];
-    const pc = mode === 'day' ? 34 : 14;
-    for (let i = 0; i < pc; i++) petals.push(newPetal(true));
-    if (mode === 'night') {
-      for (let i = 0; i < 160; i++) stars.push({ x: Math.random() * W, y: Math.random() * horizon() * 0.85, r: Math.random() * 1.3 + 0.3, ph: Math.random() * 6, sp: 0.6 + Math.random() * 1.8 });
-      for (let i = 0; i < 28; i++) flies.push({ x: Math.random() * W, y: H * (0.68 + Math.random() * 0.3), ph: Math.random() * 6, sp: 0.3 + Math.random() * 0.5, r: 1.6 + Math.random() * 1.6 });
-    }
-  }
-
-  function newPetal(anywhere) {
-    const P = PAL[mode], fromTree = Math.random() < 0.55;
-    return {
-      x: anywhere ? Math.random() * W : fromTree ? rand(tree.left, tree.right) : rand(-60, W * 0.6),
-      y: anywhere ? Math.random() * H : fromTree ? rand(tree.top, tree.y - 40) : -20,
-      vx: rand(18, 42), vy: rand(14, 30), rot: rand(0, 6), spin: rand(-1.5, 1.5), flip: rand(0, 6), fs: rand(1.5, 3.5),
-      s: rand(3, 6) * Math.min(1.3, Math.max(0.8, W / 1200)), c: P.petal[Math.floor(Math.random() * P.petal.length)], ph: rand(0, 6)
-    };
-  }
-
-  function frame(dt) {
-    const P = PAL[mode], hz = horizon();
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.drawImage(sky, 0, 0, W, H);
-    for (const s of stars) { ctx.globalAlpha = 0.35 + 0.65 * (0.5 + 0.5 * Math.sin(t * s.sp + s.ph)); ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, 7); ctx.fill(); }
-    ctx.globalAlpha = 1;
-    for (const c of clouds) {
-      c.x += c.v * dt; if (c.x > W) c.x = -c.w;
-      ctx.globalAlpha = c.a; ctx.drawImage(c.c, c.x, c.y + Math.sin(t * 0.2 + c.v) * 2, c.w, c.h);
-    }
-    ctx.globalAlpha = 1;
-    ctx.drawImage(back, 0, 0, W, H);
-    // water: sun/moon reflection column and drifting sparkle lines
-    const sp = sunPos(), waterBottom = H * 0.8;
-    for (let y = hz + 4, i = 0; y < waterBottom; y += 5, i++) {
-      const k = (y - hz) / (waterBottom - hz), wdt = (18 + k * 50) * (0.6 + 0.4 * Math.sin(t * 1.4 + i * 1.7));
-      ctx.fillStyle = P.glow + (0.55 * (1 - k * 0.7)) + ')';
-      ctx.fillRect(sp.x - wdt / 2 + Math.sin(t + i) * 4, y, wdt, 1.6);
-    }
-    ctx.fillStyle = mode === 'day' ? 'rgba(255,255,255,.55)' : 'rgba(200,210,255,.3)';
-    for (let i = 0; i < 40; i++) {
-      const y = hz + 6 + ((i * 37) % (waterBottom - hz - 8)), x = ((i * 211 + t * (8 + i % 5 * 3)) % (W + 80)) - 40;
-      const a = 0.5 + 0.5 * Math.sin(t * 2 + i); ctx.globalAlpha = a; ctx.fillRect(x, y, 14 + (i % 4) * 8, 1.2);
-    }
-    ctx.globalAlpha = 1;
-    ctx.drawImage(front, 0, 0, W, H);
-    // grass swaying in the breeze (gusts travel left to right)
-    ctx.lineCap = 'round'; ctx.lineWidth = 1.6;
-    for (const b of blades) {
-      const gust = Math.sin(t * 1.3 - b.x * 0.012 + b.ph * 0.2) * 0.5 + Math.sin(t * 0.7 - b.x * 0.004) * 0.5;
-      const lean = b.h * (0.25 + 0.35 * gust);
-      ctx.strokeStyle = b.c; ctx.beginPath(); ctx.moveTo(b.x, b.y);
-      ctx.quadraticCurveTo(b.x + lean * 0.3, b.y - b.h * 0.6, b.x + lean, b.y - b.h); ctx.stroke();
-    }
-    // falling petals
-    for (let i = 0; i < petals.length; i++) {
-      const p = petals[i];
-      p.x += (p.vx + Math.sin(t * 0.8) * 12) * dt; p.y += (p.vy + Math.sin(t * 2 + p.ph) * 10) * dt;
-      p.rot += p.spin * dt; p.flip += p.fs * dt;
-      if (p.x > W + 20 || p.y > H + 20) { petals[i] = newPetal(false); continue; }
-      ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot); ctx.scale(Math.cos(p.flip), 1);
-      ctx.fillStyle = p.c; ctx.beginPath(); ctx.ellipse(0, 0, p.s, p.s * 0.6, 0, 0, 7); ctx.fill(); ctx.restore();
-    }
-    // fireflies
-    for (const f of flies) {
-      f.x += Math.cos(t * f.sp + f.ph) * 12 * dt; f.y += Math.sin(t * f.sp * 1.3 + f.ph) * 8 * dt;
-      const a = Math.max(0, Math.sin(t * 1.5 * f.sp + f.ph * 3));
-      const gl = ctx.createRadialGradient(f.x, f.y, 0, f.x, f.y, f.r * 6);
-      gl.addColorStop(0, `rgba(255,240,150,${0.9 * a})`); gl.addColorStop(1, 'rgba(255,240,150,0)');
-      ctx.fillStyle = gl; ctx.beginPath(); ctx.arc(f.x, f.y, f.r * 6, 0, 7); ctx.fill();
-    }
-  }
-
   function loop(now) {
     const dt = Math.min(0.05, (now - last) / 1000 || 0); last = now; t += dt;
-    frame(dt);
-    raf = requestAnimationFrame(loop);
+    paint(dt); raf = requestAnimationFrame(loop);
   }
   function start() {
     cancelAnimationFrame(raf);
-    const sc = SCENES.find(s => s.id === scene);
     sel.value = scene;
-    document.body.classList.toggle('no-scenery', sc.type === 'off');
-    document.body.classList.toggle('canvas-scene', sc.type === 'canvas');
-    document.body.classList.toggle('video-scene', sc.type === 'video');
-    if (sc.type === 'video') {
-      if (vid.dataset.id !== sc.id) { vid.poster = sc.poster; vid.src = sc.src; vid.dataset.id = sc.id; }
-      if (reduce.matches || document.hidden) vid.pause(); else vid.play().catch(() => {});
-      const c = sc.credit;
-      credit.innerHTML = `<span>Background: <a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.title)}</a>${c.author ? ' by ' + esc(c.author) : ''}, ${esc(c.license)}, via Wikimedia Commons</span>`;
-    } else if (vid.dataset.id) { vid.pause(); vid.removeAttribute('src'); vid.removeAttribute('poster'); vid.dataset.id = ''; vid.load(); }
-    if (sc.type === 'canvas') credit.innerHTML = '<span>Background: Sakura Hills, drawn in code for this timer</span>';
-    if (sc.type !== 'canvas') return;
-    build();
-    if (reduce.matches || document.hidden) { frame(0); return; }
+    const off = scene === 'off';
+    document.body.classList.toggle('no-scenery', off);
+    document.body.classList.toggle('canvas-scene', !off);
+    if (off) return;
+    dpr = Math.min(window.devicePixelRatio || 1, 1.5); W = innerWidth; H = innerHeight;
+    cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+    mode = getComputedStyle(document.documentElement).getPropertyValue('--scene').trim() === 'day' ? 'day' : 'night';
+    cur = R[scene]; cur.build();
+    if (reduce.matches || document.hidden) { paint(0); return; }
     last = performance.now(); raf = requestAnimationFrame(loop);
   }
 
   let rt; addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(start, 150); });
-  document.addEventListener('visibilitychange', () => { if (document.hidden) { cancelAnimationFrame(raf); vid.pause(); } else start(); });
+  document.addEventListener('visibilitychange', () => { if (document.hidden) cancelAnimationFrame(raf); else start(); });
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', start);
   reduce.addEventListener('change', start);
   new MutationObserver(start).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
